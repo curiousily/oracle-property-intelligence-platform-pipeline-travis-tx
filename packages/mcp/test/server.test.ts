@@ -39,7 +39,11 @@ describe("Travis Oracle MCP server", () => {
   it("lists every query tool plus read-only SQL, with JSON Schemas", async () => {
     const { tools } = await client.listTools();
 
-    expect(tools.map((tool) => tool.name)).toEqual([...TOOLS.map((tool) => tool.name), "run_sql"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      ...TOOLS.map((tool) => tool.name),
+      "get_schema",
+      "run_sql",
+    ]);
     const aged = tools.find((tool) => tool.name === "find_aged_roofs");
     expect(aged?.inputSchema.properties).toHaveProperty("radius_miles");
     expect(aged?.annotations?.readOnlyHint).toBe(true);
@@ -63,6 +67,19 @@ describe("Travis Oracle MCP server", () => {
 
     expect(isError).toBe(true);
     expect(text).toMatch(/Unknown place "Atlantis"/);
+  });
+
+  it("describes the published tables so clients can write SQL without guessing", async () => {
+    const { isError, text } = await callJson("get_schema", {});
+    const { tables } = JSON.parse(text);
+
+    expect(isError).toBe(false);
+    expect(tables.properties).toEqual(
+      expect.arrayContaining([
+        { column: "prop_id", type: "BIGINT" },
+        { column: "roof_age_years", type: "INTEGER" },
+      ]),
+    );
   });
 
   it("runs read-only SQL", async () => {

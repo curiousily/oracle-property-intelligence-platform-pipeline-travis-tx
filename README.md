@@ -14,6 +14,7 @@ The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 | IPNS name (pointer to the latest manifest) | `k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c` |
 | CARs and manifests of every publication | [GitHub Releases](https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx/releases) |
 | MCP server | `npm ci && npm run --silent mcp` (see [MCP](#mcp)) |
+| Roofing CRM built on this dataset | https://roofing-crm.curiousily.workers.dev ([repository](https://github.com/curiousily/roofing-crm/tree/travis-crm)) |
 
 Open any CID on a public gateway this project does not operate:
 
@@ -140,7 +141,7 @@ npm ci
 claude mcp add travis-oracle -- npm run --silent mcp --prefix "$PWD"   # or any MCP client: npm run --silent mcp
 ```
 
-- **Tools.** The stdio server exposes every query tool plus a read-only `run_sql`; DuckDB parses each statement and only a single SELECT is allowed.
+- **Tools.** The stdio server exposes every query tool, `get_schema` (columns and types of every table) and a read-only `run_sql`. DuckDB parses each statement and only a single SELECT is allowed.
 - **Data.** It reads the latest publication's Parquet over HTTP. DuckDB external access is locked to that dataset's URL prefix.
 - **`TRAVIS_ORACLE_GATEWAY`.** Set it to `https://ipfs.orbitor.dev` to query straight from public IPFS with no project infrastructure.
 - **`TRAVIS_ORACLE_ROOT_CID`.** Set it to pin any published snapshot.

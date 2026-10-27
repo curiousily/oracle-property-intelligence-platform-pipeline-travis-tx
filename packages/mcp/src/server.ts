@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { type DatasetInfo, runTool, TOOLS } from "@travis-oracle/query-core";
+import { type DatasetInfo, type Row, runTool, TABLES, TOOLS } from "@travis-oracle/query-core";
 import { z } from "zod";
 import type { DuckDbRunner } from "./duckdb-runner.js";
 
@@ -32,6 +32,17 @@ export function createServer({ sql, dataset }: ServerDependencies): McpServer {
   }
 
   server.registerTool(
+    "get_schema",
+    {
+      description:
+        "Columns and DuckDB types of every published table. Call it before writing SQL for run_sql.",
+      inputSchema: z.object({}),
+      annotations: READ_ONLY,
+    },
+    () => answer(async () => ({ tables: await describeTables(sql), dataset })),
+  );
+
+  server.registerTool(
     "run_sql",
     {
       description:
@@ -47,6 +58,20 @@ export function createServer({ sql, dataset }: ServerDependencies): McpServer {
   );
 
   return server;
+}
+
+async function describeTables(
+  sql: ServerDependencies["sql"],
+): Promise<Record<string, { column: string; type: string }[]>> {
+  const columns = await sql.all(`SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_name IN (${TABLES.map((table) => `'${table}'`).join(", ")})
+ORDER BY table_name, ordinal_position`);
+  const tables: Record<string, { column: string; type: string }[]> = {};
+  for (const { table_name: table, column_name: column, data_type: type } of columns as Row[]) {
+    (tables[String(table)] ??= []).push({ column: String(column), type: String(type) });
+  }
+  return tables;
 }
 
 async function answer(run: () => Promise<unknown>): Promise<CallToolResult> {
