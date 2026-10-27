@@ -25,6 +25,7 @@ permissions:
 
 env:
   RAW_BUCKET: travis-oracle-raw
+  MIRROR_BUCKET: travis-oracle-mirror
   BBB_BUDGET_MINUTES: "20"
   DATA_DIR: ${{ github.workspace }}/data
 
@@ -119,7 +120,7 @@ jobs:
           api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Fetch every permit page, the latest TCAD tables and parcels, and the previous build
+      - name: Fetch every permit page, the latest TCAD tables and parcels, the run history and the previous build
         run: |
           latest_run() {
             aws s3 ls "s3://$RAW_BUCKET/$1/" --endpoint-url "$R2_ENDPOINT" | awk '$1 == "PRE" { print $2 }' | tr -d '/' | sort | tail -1
@@ -133,6 +134,9 @@ jobs:
           fetch "raw/tcad-parcels/$(latest_run raw/tcad-parcels)"
           address_points="$(latest_run raw/travis-address-points)"
           if [ -n "$address_points" ]; then fetch "raw/travis-address-points/$address_points"; fi
+          fetch runs
+          aws s3 sync "s3://$RAW_BUCKET/build" "$DATA_DIR/build" --endpoint-url "$R2_ENDPOINT" --only-show-errors \
+            --exclude "*" --include "*/build.json"
           previous="$(latest_run build)"
           if [ -n "$previous" ]; then fetch "build/$previous"; fi
 
@@ -200,6 +204,20 @@ jobs:
             aws s3 cp "$publish_dir/$file" "s3://$RAW_BUCKET/published/${BUILD_ID}/$file" --endpoint-url "$R2_ENDPOINT" --only-show-errors
           done
           aws s3 cp "$DATA_DIR/published/history.json" "s3://$RAW_BUCKET/published/history.json" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+
+      - name: Mirror the publication into R2 by CID for the explorer
+        run: |
+          publish_dir="$DATA_DIR/publish/${BUILD_ID}"
+          build_dir="$DATA_DIR/build/${BUILD_ID}"
+          root="$(jq -r .publication.rootCid "$publish_dir/publication.json")"
+          manifest="$(jq -r .publication.manifestCid "$publish_dir/publication.json")"
+          jq -r '.manifest.objects[] | select(.kind == "file") | .name' "$publish_dir/publication.json" |
+            while read -r name; do
+              aws s3 cp "$build_dir/${name#tables/}" "s3://$MIRROR_BUCKET/ipfs/$root/$name" \
+                --endpoint-url "$R2_ENDPOINT" --only-show-errors
+            done
+          aws s3 cp "$publish_dir/manifest.json" "s3://$MIRROR_BUCKET/ipfs/$manifest" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 cp "$DATA_DIR/published/history.json" "s3://$MIRROR_BUCKET/publications.json" --endpoint-url "$R2_ENDPOINT" --only-show-errors
 
       - name: Attach the CAR and manifest to a release
         env:

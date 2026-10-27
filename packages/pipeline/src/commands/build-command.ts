@@ -2,13 +2,21 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { type BuildResult, buildLeadTables } from "../application/build-lead-tables.js";
 import type { BuildInputs } from "../application/lead-build-ports.js";
+import { SOURCE_CATALOG } from "../domain/source-catalog.js";
 import { SourceId } from "../domain/source-id.js";
 import { DuckDbLeadWarehouse } from "../infrastructure/duckdb-lead-warehouse.js";
 import { TABLES_DIR } from "../infrastructure/file-artifact-paths.js";
 import { RAW_DIR, RAW_PAGE_GLOB } from "../infrastructure/file-raw-store.js";
 import { BBB_ARCHIVE_FILE } from "../infrastructure/ndjson-bbb-archive-store.js";
 import { latestRunDir } from "../infrastructure/run-directories.js";
-import { BUILD_DIR, BUILD_RESULT_FILE, BUILD_STAGING_DIR } from "./settings.js";
+import { readRunHistory } from "../infrastructure/run-history-files.js";
+import {
+  BUILD_DIR,
+  BUILD_RESULT_FILE,
+  BUILD_STAGING_DIR,
+  RUN_HISTORY_FILE,
+  SOURCES_FILE,
+} from "./settings.js";
 
 export async function runBuild(
   dataDir: string,
@@ -59,7 +67,9 @@ export async function runBuild(
         ...(inputs.bbbProfiles && { bbbProfiles: relative(dataDir, inputs.bbbProfiles) }),
       },
     };
-    await writeFile(join(stagingDir, BUILD_RESULT_FILE), `${JSON.stringify(portable, null, 2)}\n`);
+    await writeJson(join(stagingDir, BUILD_RESULT_FILE), portable);
+    await writeJson(join(stagingDir, RUN_HISTORY_FILE), await readRunHistory(dataDir));
+    await writeJson(join(stagingDir, SOURCES_FILE), SOURCE_CATALOG);
     await mkdir(buildsDir, { recursive: true });
     await rm(outputDir, { recursive: true, force: true });
     await rename(stagingDir, outputDir);
@@ -67,4 +77,8 @@ export async function runBuild(
   } finally {
     warehouse.close();
   }
+}
+
+async function writeJson(path: string, value: unknown): Promise<void> {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }

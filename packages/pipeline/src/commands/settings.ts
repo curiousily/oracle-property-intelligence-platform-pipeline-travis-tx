@@ -11,6 +11,8 @@ export const BUILD_STAGING_DIR = "build-staging";
 export const PUBLISH_DIR = "publish";
 export const PUBLISHED_HISTORY_FILE = "published/history.json";
 export const BUILD_RESULT_FILE = "build.json";
+export const RUN_HISTORY_FILE = "runs.json";
+export const SOURCES_FILE = "sources.json";
 
 export const VERIFICATION_GATEWAYS = [
   "https://ipfs.orbitor.dev",
