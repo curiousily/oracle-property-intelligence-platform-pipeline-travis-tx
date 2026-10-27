@@ -80,6 +80,7 @@ enum ExportTable {
   Contractors = "contractors",
   Businesses = "businesses",
   HailEvents = "hail_events",
+  Owners = "owners",
 }
 
 const EXPORT_KEYS: Record<ExportTable, string> = {
@@ -89,6 +90,7 @@ const EXPORT_KEYS: Record<ExportTable, string> = {
   [ExportTable.Contractors]: "contractor_key",
   [ExportTable.Businesses]: "business_id",
   [ExportTable.HailEvents]: "event_id",
+  [ExportTable.Owners]: "owner_key",
 };
 
 const PERMIT_COLUMNS = {
@@ -534,12 +536,15 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
 
   async ownerFacts(): Promise<OwnerFacts[]> {
     const rows = await this.rows(`
-      SELECT prop_id, py_addr_state, py_addr_zip, py_addr_country, ${isoDate("deed_dt")} AS deed_date
+      SELECT prop_id, py_owner_name, py_addr_line1, py_addr_state, py_addr_zip, py_addr_country,
+        ${isoDate("deed_dt")} AS deed_date
       FROM tcad_properties
     `);
     return rows.map((row) => ({
       propId: Number(row.prop_id),
+      name: text(row.py_owner_name),
       mailing: {
+        line: text(row.py_addr_line1),
         state: text(row.py_addr_state),
         zip: text(row.py_addr_zip),
         country: text(row.py_addr_country),
@@ -550,12 +555,13 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
 
   async saveOwnerSignals(rows: readonly OwnerSignals[]): Promise<void> {
     await this.connection.run(
-      "CREATE OR REPLACE TABLE owner_signals (prop_id BIGINT, owner_locality VARCHAR, ownership_years INTEGER)",
+      "CREATE OR REPLACE TABLE owner_signals (prop_id BIGINT, owner_locality VARCHAR, ownership_years INTEGER, owner_key VARCHAR)",
     );
     await this.append("owner_signals", rows, (appender, row) => {
       appender.appendBigInt(BigInt(row.propId));
       appender.appendVarchar(row.locality);
       appendOptionalInteger(appender, row.ownershipYears);
+      appendOptionalVarchar(appender, row.ownerKey);
     });
   }
 
@@ -766,7 +772,8 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         p.py_addr_line1 AS mailing_line1, p.py_addr_line2 AS mailing_line2,
         p.py_addr_line3 AS mailing_line3, p.py_addr_city AS mailing_city, p.py_addr_state AS mailing_state,
         p.py_addr_zip AS mailing_zip, p.py_addr_country AS mailing_country,
-        o.owner_locality, p.deed_dt AS deed_date, o.ownership_years,
+        o.owner_locality, p.deed_dt AS deed_date, o.ownership_years, o.owner_key,
+        CASE WHEN o.owner_key IS NOT NULL THEN count(*) OVER (PARTITION BY o.owner_key) END AS owner_properties,
         p.market_value, p.appraised_val AS appraised_value, p.hs_exempt AS homestead, p.land_acres,
         y.year_built, ra.roof_covering, ra.roof_style,
         a.roof_age_years, a.roof_age_anchor, a.roof_age_anchor_date, a.roof_age_anchor_permit, a.roof_age_confidence,
@@ -837,6 +844,26 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       LEFT JOIN franchise_taxpayers franchise ON franchise.taxpayer_number = registry.taxpayer_number
       LEFT JOIN sales_taxpayers sales ON sales.taxpayer_number = registry.taxpayer_number
       LEFT JOIN licenses USING (contractor_key);
+
+      CREATE OR REPLACE VIEW export_owners AS
+      SELECT owner_key,
+        first(owner_name ORDER BY prop_id) AS owner_name,
+        first(mailing_line1 ORDER BY prop_id) AS mailing_line1,
+        first(mailing_city ORDER BY prop_id) AS mailing_city,
+        first(mailing_state ORDER BY prop_id) AS mailing_state,
+        first(mailing_zip ORDER BY prop_id) AS mailing_zip,
+        first(owner_locality ORDER BY prop_id) AS owner_locality,
+        count(*) AS properties,
+        list(prop_id ORDER BY market_value DESC NULLS LAST, prop_id) AS prop_ids,
+        CAST(sum(market_value) AS BIGINT) AS total_market_value,
+        count(*) FILTER (WHERE homestead) AS homestead_properties,
+        count(*) FILTER (WHERE roof_age_years > ${AGED_ROOF_YEARS}) AS aged_roofs,
+        CAST(sum(unfinished_roofing_permits) AS BIGINT) AS unfinished_roofing_permits,
+        max(ownership_years) AS longest_ownership_years,
+        ${literal(SourceId.TcadAppraisalExport)} AS source, ${literal(this.appraisalRunId)} AS source_run_id
+      FROM export_properties
+      WHERE owner_key IS NOT NULL
+      GROUP BY owner_key;
 
       CREATE OR REPLACE VIEW export_hail_events AS
       SELECT event_id, episode_id, CAST(event_date AS DATE) AS event_date, begin_time, timezone, county,
@@ -935,6 +962,13 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         registry_match_method: await this.histogram("export_contractors", "registry_match_method"),
         with_license: await this.countWhere("export_contractors", "license_types IS NOT NULL"),
         license_match_method: await this.histogram("export_contractors", "license_match_method"),
+      },
+      owners: {
+        rows: await this.count("export_owners"),
+        with_two_or_more_properties: await this.countWhere("export_owners", "properties >= 2"),
+        largest_portfolio: Number(
+          (await this.rows("SELECT max(properties) AS n FROM export_owners"))[0]?.n ?? 0,
+        ),
       },
       hail_events: {
         rows: await this.count("export_hail_events"),

@@ -2,7 +2,7 @@ import { ANALYST_PROMPT } from "./agent-prompt.js";
 import { AgentRoute, type ChatCompletion, type ChatModel } from "./agent-route.js";
 import { analystTools } from "./analyst-tools.js";
 import { IpfsRoute, type MirrorStore } from "./ipfs-route.js";
-import { PublicationIndex } from "./publications.js";
+import { PublicationIndex, publicationRecordKey } from "./publications.js";
 import { tooManyRequests } from "./rate-limit.js";
 
 interface Env {
@@ -17,6 +17,7 @@ interface Env {
 }
 
 const PUBLICATIONS_KEY = "publications.json";
+const NOT_FOUND = 404;
 const PUBLICATIONS_REFRESH_MS = 60_000;
 const PUBLICATIONS_CACHE_CONTROL = "public, max-age=60";
 const APP = "explorer";
@@ -82,6 +83,13 @@ export default {
       return Response.json(await publications(env).list(), {
         headers: { "cache-control": PUBLICATIONS_CACHE_CONTROL },
       });
+    }
+    const recordKey = publicationRecordKey(pathname);
+    if (recordKey) {
+      const record = await env.MIRROR.get(recordKey);
+      return record
+        ? new Response(record.body, { headers: { "content-type": "application/json" } })
+        : Response.json({ error: "No CI record for this publication." }, { status: NOT_FOUND });
     }
     if (pathname === Route.AgentBudget) return agentOf(env).budget();
     if (pathname === Route.Agent && request.method === "POST") {

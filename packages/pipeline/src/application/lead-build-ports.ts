@@ -41,7 +41,8 @@ export interface PropertyRoofAge extends RoofAgeEstimate {
 
 export interface OwnerFacts {
   propId: number;
-  mailing: MailingAddress;
+  name: string | undefined;
+  mailing: MailingAddress & { line: string | undefined };
   deedDate: string | undefined;
 }
 
@@ -49,6 +50,7 @@ export interface OwnerSignals {
   propId: number;
   locality: OwnerLocality;
   ownershipYears: number | undefined;
+  ownerKey: string | undefined;
 }
 
 export interface ContractorName {

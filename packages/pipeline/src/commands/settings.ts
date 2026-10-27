@@ -14,11 +14,7 @@ export const BUILD_RESULT_FILE = "build.json";
 export const RUN_HISTORY_FILE = "runs.json";
 export const SOURCES_FILE = "sources.json";
 
-export const VERIFICATION_GATEWAYS = [
-  "https://ipfs.orbitor.dev",
-  "https://gw.ipfs-lens.dev",
-  "https://gateway.pinata.cloud",
-];
+export const VERIFICATION_GATEWAYS = ["https://ipfs.orbitor.dev", "https://gw.ipfs-lens.dev"];
 export const VERIFICATION_TIMEOUT_MS = 600_000;
 
 const RETRY_POLICY: RetryPolicy = {

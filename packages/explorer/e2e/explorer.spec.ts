@@ -34,6 +34,8 @@ test("verifies the manifest by CID on two independent public gateways", async ({
   const checks = page.locator(".facts dd").first().locator(".badge");
   await expect(checks.filter({ hasText: "ipfs.orbitor.dev: verified" })).toBeVisible();
   await expect(checks.filter({ hasText: "gw.ipfs-lens.dev: verified" })).toBeVisible();
+  await expect(page.getByText(/\d+ of \d+ gateway checks passed when CI published/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "record committed to git" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Publication history" })).toBeVisible();
   await page.screenshot({ path: `${SCREENSHOTS}/publication.png`, fullPage: true });
 });

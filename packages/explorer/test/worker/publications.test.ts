@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PublicationIndex } from "../../worker/publications.js";
+import { PublicationIndex, publicationRecordKey } from "../../worker/publications.js";
 
 const HISTORY = [
   {
@@ -37,5 +37,18 @@ describe("PublicationIndex", () => {
     const index = new PublicationIndex({ read: async () => null, now: () => 0, refreshMs: 1 });
 
     expect(await index.list()).toEqual([]);
+  });
+});
+
+describe("publicationRecordKey", () => {
+  it("maps a publication's path to its CI record in the mirror", () => {
+    expect(publicationRecordKey("/api/publications/20261027T154926Z")).toBe(
+      "publications/20261027T154926Z.json",
+    );
+  });
+
+  it("accepts only build ids", () => {
+    expect(publicationRecordKey("/api/publications/../secrets")).toBeUndefined();
+    expect(publicationRecordKey("/api/publications/latest")).toBeUndefined();
   });
 });

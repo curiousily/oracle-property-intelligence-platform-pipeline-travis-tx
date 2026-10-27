@@ -9,10 +9,9 @@ import {
   type McpSession,
   type McpToolResult,
 } from "../mcp/mcp-session.js";
+import { REPOSITORY_URL } from "../repository.js";
 import { datasetInfo } from "./dataset-info.js";
 
-const REPOSITORY_URL =
-  "https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx";
 const FIRST_TOOL = "find_aged_roofs";
 const EXAMPLE_INPUTS: Record<string, object> = {
   find_aged_roofs: { place: "Rollingwood", radius_miles: 5, min_roof_age_years: 15, limit: 10 },

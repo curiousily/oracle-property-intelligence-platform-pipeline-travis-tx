@@ -28,3 +28,12 @@ export class PublicationIndex {
     return publications;
   }
 }
+
+const RECORD_PATH = /^\/api\/publications\/(\d{8}T\d{6}Z)$/;
+const RECORD_DIR = "publications";
+const RECORD_EXTENSION = ".json";
+
+export function publicationRecordKey(pathname: string): string | undefined {
+  const buildId = RECORD_PATH.exec(pathname)?.[1];
+  return buildId && `${RECORD_DIR}/${buildId}${RECORD_EXTENSION}`;
+}

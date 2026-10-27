@@ -221,7 +221,23 @@ jobs:
                 --endpoint-url "$R2_ENDPOINT" --only-show-errors
             done
           aws s3 cp "$publish_dir/manifest.json" "s3://$MIRROR_BUCKET/ipfs/$manifest" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 cp "$publish_dir/publication.json" "s3://$MIRROR_BUCKET/publications/${BUILD_ID}.json" \
+            --endpoint-url "$R2_ENDPOINT" --only-show-errors
           aws s3 cp "$DATA_DIR/published/history.json" "s3://$MIRROR_BUCKET/publications.json" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+
+      - name: Commit the publication record to the repository
+        run: |
+          publish_dir="$DATA_DIR/publish/${BUILD_ID}"
+          git fetch --quiet origin "$GITHUB_REF_NAME"
+          git checkout --quiet -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
+          mkdir -p "publications/${BUILD_ID}"
+          cp "$publish_dir/manifest.json" "$publish_dir/publication.json" "publications/${BUILD_ID}/"
+          cp "$DATA_DIR/published/history.json" publications/history.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add publications
+          git commit --quiet -m "Record publication ${BUILD_ID}: manifest, gateway verification and history"
+          git push --quiet origin "HEAD:$GITHUB_REF_NAME"
 
       - name: Attach the CAR and manifest to a release
         env:

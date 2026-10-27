@@ -104,7 +104,8 @@ class FakeWarehouse implements LeadWarehouse {
     return [
       {
         propId: 100008,
-        mailing: { state: "CA", zip: "94105", country: undefined },
+        name: "DJB INVESTMENT PROPERTY, LLC",
+        mailing: { state: "CA", zip: "94105", country: undefined, line: "1 Market St." },
         deedDate: "2011-11-22",
       },
     ];
@@ -276,7 +277,12 @@ describe("buildLeadTables", () => {
     const { warehouse } = await build();
 
     expect(warehouse.ownerSignals).toEqual([
-      { propId: 100008, locality: OwnerLocality.OutOfState, ownershipYears: 14 },
+      {
+        propId: 100008,
+        locality: OwnerLocality.OutOfState,
+        ownershipYears: 14,
+        ownerKey: "djb investment property|1||MARKET|ST|94105",
+      },
     ]);
   });
 

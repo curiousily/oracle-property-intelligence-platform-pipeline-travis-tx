@@ -339,7 +339,7 @@ async function writeAppraisalTables(dir: string) {
       (100020::BIGINT, 'R', '0100000003', 'CONDO OWNER A', '5 ELM', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '5', NULL, 'ELM', 'ST', '101', 'AUSTIN', '78701', NULL, 300000::BIGINT, 300000::BIGINT, true, NULL, 4::BIGINT),
       (100021::BIGINT, 'MH', '0100000003', 'CONDO OWNER B', '5 ELM', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '5', NULL, 'ELM', 'ST', '102', 'AUSTIN', '78701', NULL, 300000::BIGINT, 300000::BIGINT, true, NULL, 5::BIGINT),
       (100030::BIGINT, 'R', '0100000005', 'ELM OWNER', '500 ELM TER', NULL, NULL, 'AUSTIN', 'TX', '78702', NULL, '500', NULL, 'ELM', 'TERR', NULL, 'AUSTIN', '78702', NULL, 200000::BIGINT, 200000::BIGINT, true, 0.1, 7::BIGINT),
-      (100040::BIGINT, 'R', '0100000004', 'PINE OWNER', '77 PINE ST', NULL, NULL, 'AUSTIN', 'TX', '78703', NULL, '77', NULL, 'PINE', 'ST', NULL, 'AUSTIN', '78703', NULL, 250000::BIGINT, 250000::BIGINT, true, 0.1, 8::BIGINT),
+      (100040::BIGINT, 'R', '0100000004', 'JANE OWNER', '12 Oak St.', NULL, NULL, 'AUSTIN', 'TX', '78704', NULL, '77', NULL, 'PINE', 'ST', NULL, 'AUSTIN', '78703', NULL, 250000::BIGINT, 250000::BIGINT, true, 0.1, 8::BIGINT),
       (900001::BIGINT, 'P', '0100000009', 'SOME BUSINESS', '9 MAIN', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '9', NULL, 'MAIN', 'ST', NULL, 'AUSTIN', '78701', NULL, 1000::BIGINT, 1000::BIGINT, false, NULL, 6::BIGINT)
     ) AS t(prop_id, prop_type_cd, geo_id, py_owner_name, py_addr_line1, py_addr_line2, py_addr_line3, py_addr_city, py_addr_state, py_addr_zip, py_addr_country, situs_num, situs_street_prefx, situs_street, situs_street_suffix, situs_unit, situs_city, situs_zip, deed_dt, market_value, appraised_val, hs_exempt, land_acres, py_owner_id)`,
   );
@@ -554,6 +554,26 @@ describe("DuckDbLeadWarehouse", () => {
       roof_age_anchor: "new_construction",
       roof_age_years: 25,
       roof_age_confidence: "medium",
+    });
+  });
+
+  it("reconciles owners by name and mailing address into owner entities with their portfolio", async () => {
+    const properties = await readTable("build-1", "properties", "prop_id");
+    const owned = (propId: string) => properties.find((row) => row.prop_id === propId);
+    const owners = await readTable("build-1", "owners", "owner_key");
+
+    expect(owned("100012")?.owner_key).toBe(owned("100040")?.owner_key);
+    expect(owned("100012")).toMatchObject({ owner_properties: "2" });
+    expect(owned("100008")).toMatchObject({ owner_properties: "1" });
+    expect(owners.find((owner) => owner.owner_key === owned("100012")?.owner_key)).toMatchObject({
+      owner_name: "JANE OWNER",
+      mailing_zip: "78704",
+      owner_locality: "local",
+      properties: "2",
+      prop_ids: ["100012", "100040"],
+      total_market_value: "750000",
+      homestead_properties: "2",
+      aged_roofs: "1",
     });
   });
 
@@ -805,6 +825,11 @@ describe("DuckDbLeadWarehouse", () => {
       with_license: 1,
       license_match_method: { name_and_phone: 1 },
     });
+    expect(coverage.owners).toEqual({
+      rows: 5,
+      with_two_or_more_properties: 1,
+      largest_portfolio: 2,
+    });
     expect(coverage.hail_events).toEqual({
       rows: 2,
       one_inch_or_larger: 1,
@@ -884,6 +909,7 @@ describe("DuckDbLeadWarehouse", () => {
       "contractors",
       "businesses",
       "hail_events",
+      "owners",
     ]) {
       const digest = async (buildId: string) =>
         createHash("sha256")

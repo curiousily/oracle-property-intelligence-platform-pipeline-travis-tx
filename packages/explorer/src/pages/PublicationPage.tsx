@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Badge, Card, Cid, Disclosure, type Tone } from "../components/ui.js";
 import type { Dataset } from "../data/dataset.js";
+import { useAsync } from "../data/hooks.js";
 import type { ManifestObject, Publication } from "../data/types.js";
 import { formatBytes, formatDateTime } from "../format.js";
 import {
@@ -11,6 +12,7 @@ import {
   resolveIpns,
 } from "../ipfs/gateway-check.js";
 import { gatewayUrl, INDEPENDENT_GATEWAYS, IPNS_GATEWAY } from "../ipfs/gateways.js";
+import { REPOSITORY_BRANCH, REPOSITORY_URL } from "../repository.js";
 
 const LARGE_OBJECT_BYTES = 20 * 1024 * 1024;
 const STATUS_TONE: Record<CheckStatus, Tone> = {
@@ -20,6 +22,25 @@ const STATUS_TONE: Record<CheckStatus, Tone> = {
 };
 
 type Checks = Record<string, GatewayCheck[] | "running">;
+
+interface CiCheck {
+  name: string;
+  gateway: string;
+  status: string;
+  httpStatus?: number;
+  checkedAt: string;
+}
+
+interface CiRecord {
+  verification: CiCheck[];
+}
+
+const CI_VERIFIED = "verified";
+
+async function loadCiRecord(buildId: string): Promise<CiRecord | undefined> {
+  const response = await fetch(`/api/publications/${buildId}`);
+  return response.ok ? ((await response.json()) as CiRecord) : undefined;
+}
 
 export function PublicationPage({ dataset }: { dataset: Dataset }) {
   const { manifest, publication, publications } = dataset;
@@ -31,6 +52,10 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
     size: 0,
   };
   const objects: CheckedObject[] = [manifest.root, ...manifest.objects];
+  const record = useAsync(() => loadCiRecord(publication.buildId), publication.buildId);
+  const ciChecks = record.state === "ready" ? record.value?.verification : undefined;
+  const ciChecksOf = (name: string) => ciChecks?.filter((check) => check.name === name);
+  const evidenceUrl = `${REPOSITORY_URL}/blob/${REPOSITORY_BRANCH}/publications/${publication.buildId}/publication.json`;
 
   const verify = async (object: CheckedObject) => {
     setChecks((current) => ({ ...current, [object.cid]: "running" }));
@@ -64,6 +89,20 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
             <button type="button" className="link-button" onClick={() => verify(manifestObject)}>
               verify
             </button>
+          </dd>
+          <dt>Verified by CI</dt>
+          <dd>
+            {ciChecks ? (
+              <>
+                {ciChecks.filter((check) => check.status === CI_VERIFIED).length} of{" "}
+                {ciChecks.length} gateway checks passed when CI published this build ·{" "}
+                <a href={evidenceUrl} target="_blank" rel="noreferrer">
+                  record committed to git
+                </a>
+              </>
+            ) : (
+              <span className="muted">no CI record for this build</span>
+            )}
           </dd>
           <dt>Dataset root (directory)</dt>
           <dd>
@@ -123,7 +162,8 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
                 <th>Size</th>
                 <th>CID</th>
                 <th>SHA-256</th>
-                <th>Gateways</th>
+                <th>Checked by CI at publish</th>
+                <th>Check now</th>
               </tr>
             </thead>
             <tbody>
@@ -131,6 +171,7 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
                 <ObjectRow
                   key={object.cid}
                   object={object as ManifestObject}
+                  ciChecks={ciChecksOf(object.name)}
                   check={checks[object.cid]}
                   onVerify={() => verify(object)}
                 />
@@ -153,10 +194,12 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
 
 function ObjectRow({
   object,
+  ciChecks,
   check,
   onVerify,
 }: {
   object: ManifestObject;
+  ciChecks: CiCheck[] | undefined;
   check: GatewayCheck[] | "running" | undefined;
   onVerify: () => void;
 }) {
@@ -179,6 +222,15 @@ function ObjectRow({
         ) : (
           "root block hash = CID"
         )}
+      </td>
+      <td>
+        <span className="checks">
+          {(ciChecks ?? []).map((ci) => (
+            <Badge key={ci.gateway} tone={ci.status === CI_VERIFIED ? "good" : "warn"}>
+              {new URL(ci.gateway).host}: {ci.status}
+            </Badge>
+          ))}
+        </span>
       </td>
       <td>
         <CheckResult check={check} />

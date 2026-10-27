@@ -6,6 +6,7 @@ import {
   type IdentityCandidate,
   matchIdentities,
 } from "../domain/identity-match.js";
+import { ownerKey } from "../domain/owner-entity.js";
 import { ownerLocality, ownershipYears } from "../domain/owner-signals.js";
 import { permitLifecycle } from "../domain/permit-lifecycle.js";
 import { estimateRoofAge } from "../domain/roof-age.js";
@@ -80,6 +81,11 @@ export async function buildLeadTables(
     propId: facts.propId,
     locality: ownerLocality(facts.mailing),
     ownershipYears: ownershipYears(facts.deedDate, asOf),
+    ownerKey: ownerKey({
+      name: facts.name,
+      mailingLine: facts.mailing.line,
+      mailingZip: facts.mailing.zip,
+    }),
   }));
   await warehouse.saveOwnerSignals(owners);
 
