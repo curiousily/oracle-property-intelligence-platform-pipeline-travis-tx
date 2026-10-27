@@ -2,20 +2,27 @@ import { describe, expect, it } from "vitest";
 import { buildLeadTables } from "../../src/application/build-lead-tables.js";
 import type {
   BuildInputs,
+  BusinessAddress,
+  BusinessAddressKey,
   ClassifiedPermit,
   ContractorKey,
+  ContractorLicense,
   ContractorName,
   LeadWarehouse,
+  LicenseMatch,
   OwnerFacts,
   OwnerSignals,
   PermitCandidate,
   PropertyRoofAge,
   PropertyRoofEvidence,
+  RegistryMatch,
+  RegistryTaxpayer,
   TableSummary,
 } from "../../src/application/lead-build-ports.js";
 import { type BbbMatch, BbbMatchMethod } from "../../src/domain/bbb-match.js";
 import { type BbbProfile, BbbRating } from "../../src/domain/bbb-profile.js";
 import { Confidence } from "../../src/domain/confidence.js";
+import { IdentityMatchMethod } from "../../src/domain/identity-match.js";
 import { OwnerLocality } from "../../src/domain/owner-signals.js";
 import { PermitState } from "../../src/domain/permit-state.js";
 import { RoofAnchor } from "../../src/domain/roof-age.js";
@@ -49,6 +56,9 @@ class FakeWarehouse implements LeadWarehouse {
   bbbMatches: readonly BbbMatch[] = [];
   ownerSignals: readonly OwnerSignals[] = [];
   contractorKeys: readonly ContractorKey[] = [];
+  registryMatches: readonly RegistryMatch[] = [];
+  licenseMatches: readonly LicenseMatch[] = [];
+  businessAddressKeys: readonly BusinessAddressKey[] = [];
   exportedTo: { outputDir: string; previousDir: string | undefined } | undefined;
 
   async load(inputs: BuildInputs) {
@@ -104,8 +114,10 @@ class FakeWarehouse implements LeadWarehouse {
   }
   async contractorNames(): Promise<ContractorName[]> {
     return [
-      { name: "RELIABLE ROOFING OF TEXAS INC", phone: "(512) 555-0142" },
-      { name: "  ", phone: undefined },
+      { name: "RELIABLE ROOFING OF TEXAS INC", phone: "(512) 555-0142", company: true },
+      { name: "  ", phone: undefined, company: false },
+      { name: "HEATHER SMITH", phone: undefined, company: false },
+      { name: "Lone Star Roofing LLC", phone: undefined, company: true },
     ];
   }
   async saveContractorKeys(rows: readonly ContractorKey[]) {
@@ -134,6 +146,74 @@ class FakeWarehouse implements LeadWarehouse {
   }
   async saveBbbMatches(rows: readonly BbbMatch[]) {
     this.bbbMatches = rows;
+  }
+  async *registryTaxpayers(): AsyncIterable<RegistryTaxpayer[]> {
+    yield [
+      {
+        taxpayerNumber: "32042636673",
+        names: ["RELIABLE ROOFING OF TEXAS, INC.", "RELIABLE ROOFING"],
+        zips: ["78704"],
+        inTravisCounty: true,
+      },
+      {
+        taxpayerNumber: "17000000001",
+        names: ["HEATHER SMITH"],
+        zips: ["78745"],
+        inTravisCounty: true,
+      },
+    ];
+    yield [
+      {
+        taxpayerNumber: "32000000002",
+        names: ["LONE STAR ROOFING, LLC"],
+        zips: ["75201"],
+        inTravisCounty: false,
+      },
+      {
+        taxpayerNumber: "32000000003",
+        names: ["Lone Star Roofing Inc"],
+        zips: ["78660"],
+        inTravisCounty: false,
+      },
+      {
+        taxpayerNumber: "32000000004",
+        names: ["UNRELATED HOLDINGS LLC"],
+        zips: ["78701"],
+        inTravisCounty: true,
+      },
+    ];
+  }
+  async saveRegistryMatches(rows: readonly RegistryMatch[]) {
+    this.registryMatches = rows;
+  }
+  async contractorLicenses(): Promise<ContractorLicense[]> {
+    return [
+      {
+        licenseType: "A/C Contractor",
+        licenseNumber: "136",
+        businessName: "RELIABLE ROOFING INC",
+        phones: ["512-555-0142"],
+      },
+      {
+        licenseType: "Electrical Contractor",
+        licenseNumber: "900",
+        businessName: "Reliable Roofing",
+        phones: [],
+      },
+      { licenseType: "A/C Contractor", licenseNumber: "771", businessName: undefined, phones: [] },
+    ];
+  }
+  async saveLicenseMatches(rows: readonly LicenseMatch[]) {
+    this.licenseMatches = rows;
+  }
+  async businessAddresses(): Promise<BusinessAddress[]> {
+    return [
+      { businessId: "32042636673-00001", address: "1234 W MAIN ST STE 100" },
+      { businessId: "32042636673-00002", address: "PO BOX 5" },
+    ];
+  }
+  async saveBusinessAddressKeys(rows: readonly BusinessAddressKey[]) {
+    this.businessAddressKeys = rows;
   }
   async exportTables(outputDir: string, previousDir: string | undefined): Promise<TableSummary[]> {
     this.exportedTo = { outputDir, previousDir };
@@ -210,6 +290,66 @@ describe("buildLeadTables", () => {
         contractorKey: "reliable roofing",
         phoneKey: "5125550142",
       },
+      {
+        name: "HEATHER SMITH",
+        phone: undefined,
+        contractorKey: "heather smith",
+        phoneKey: undefined,
+      },
+      {
+        name: "Lone Star Roofing LLC",
+        phone: undefined,
+        contractorKey: "lone star roofing",
+        phoneKey: undefined,
+      },
+    ]);
+  });
+
+  it("resolves company-named contractors to Texas Comptroller taxpayers, preferring the local one among namesakes", async () => {
+    const { warehouse } = await build();
+
+    expect(warehouse.registryMatches).toEqual([
+      {
+        contractorKey: "reliable roofing",
+        taxpayerNumber: "32042636673",
+        method: IdentityMatchMethod.Name,
+        confidence: Confidence.Medium,
+      },
+      {
+        contractorKey: "lone star roofing",
+        taxpayerNumber: "32000000003",
+        method: IdentityMatchMethod.LocalName,
+        confidence: Confidence.Low,
+      },
+    ]);
+  });
+
+  it("matches contractors to every TDLR license their business holds", async () => {
+    const { warehouse } = await build();
+
+    expect(warehouse.licenseMatches).toEqual([
+      {
+        contractorKey: "reliable roofing",
+        licenseType: "A/C Contractor",
+        licenseNumber: "136",
+        method: IdentityMatchMethod.NameAndPhone,
+        confidence: Confidence.High,
+      },
+      {
+        contractorKey: "reliable roofing",
+        licenseType: "Electrical Contractor",
+        licenseNumber: "900",
+        method: IdentityMatchMethod.NameAndPhone,
+        confidence: Confidence.High,
+      },
+    ]);
+  });
+
+  it("keys business outlet addresses so outlets can be linked to properties", async () => {
+    const { warehouse } = await build();
+
+    expect(warehouse.businessAddressKeys).toEqual([
+      { businessId: "32042636673-00001", addressKey: "1234|W|MAIN|ST" },
     ]);
   });
 
@@ -243,6 +383,8 @@ describe("buildLeadTables", () => {
       roofAgeConfidence: { [Confidence.High]: 1 },
       ownerLocality: { [OwnerLocality.OutOfState]: 1 },
       bbbMatches: { [BbbMatchMethod.NameAndPhone]: 1 },
+      registryMatches: { [IdentityMatchMethod.Name]: 1, [IdentityMatchMethod.LocalName]: 1 },
+      licenseMatches: { [IdentityMatchMethod.NameAndPhone]: 2 },
       tables: [{ table: "properties", rows: 2, added: 2, changed: 0, removed: 0 }],
     });
   });

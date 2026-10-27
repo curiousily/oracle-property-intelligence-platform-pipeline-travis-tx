@@ -27,7 +27,10 @@ export async function runBuild(
     join(dataDir, TABLES_DIR, SourceId.TcadAppraisalExport),
   );
   const parcelRun = await latestRunDir(join(dataDir, RAW_DIR, SourceId.TcadParcels));
-  const addressPointRun = await latestRunDir(join(dataDir, RAW_DIR, SourceId.TravisAddressPoints));
+  const snapshotPages = async (source: SourceId) => {
+    const run = await latestRunDir(join(dataDir, RAW_DIR, source));
+    return run && join(run, RAW_PAGE_GLOB);
+  };
   const bbbArchiveDir = join(dataDir, RAW_DIR, SourceId.BbbArchive);
   const hasBbbArchive = (await latestRunDir(bbbArchiveDir)) !== undefined;
   if (appraisalTablesDir === undefined || parcelRun === undefined) {
@@ -42,8 +45,11 @@ export async function runBuild(
     permitPages: join(dataDir, RAW_DIR, SourceId.AustinPermits, "*", RAW_PAGE_GLOB),
     appraisalTablesDir,
     parcelPages: join(parcelRun, RAW_PAGE_GLOB),
-    ...(addressPointRun && { addressPointPages: join(addressPointRun, RAW_PAGE_GLOB) }),
-    ...(hasBbbArchive && { bbbProfiles: join(bbbArchiveDir, "*", BBB_ARCHIVE_FILE) }),
+    addressPointPages: await snapshotPages(SourceId.TravisAddressPoints),
+    bbbProfiles: hasBbbArchive ? join(bbbArchiveDir, "*", BBB_ARCHIVE_FILE) : undefined,
+    salesTaxPages: await snapshotPages(SourceId.TxSalesTaxPermits),
+    franchisePages: await snapshotPages(SourceId.TxFranchiseTaxpayers),
+    licensePages: await snapshotPages(SourceId.TdlrLicenses),
   };
 
   const warehouse = await DuckDbLeadWarehouse.open();
@@ -57,15 +63,7 @@ export async function runBuild(
     });
     const portable: BuildResult = {
       ...result,
-      inputs: {
-        permitPages: relative(dataDir, inputs.permitPages),
-        appraisalTablesDir: relative(dataDir, inputs.appraisalTablesDir),
-        parcelPages: relative(dataDir, inputs.parcelPages),
-        ...(inputs.addressPointPages && {
-          addressPointPages: relative(dataDir, inputs.addressPointPages),
-        }),
-        ...(inputs.bbbProfiles && { bbbProfiles: relative(dataDir, inputs.bbbProfiles) }),
-      },
+      inputs: relativeInputs(dataDir, inputs),
     };
     await writeJson(join(stagingDir, BUILD_RESULT_FILE), portable);
     await writeJson(join(stagingDir, RUN_HISTORY_FILE), await readRunHistory(dataDir));
@@ -77,6 +75,14 @@ export async function runBuild(
   } finally {
     warehouse.close();
   }
+}
+
+function relativeInputs(dataDir: string, inputs: BuildInputs): BuildInputs {
+  return Object.fromEntries(
+    Object.entries(inputs).flatMap(([name, path]) =>
+      path === undefined ? [] : [[name, relative(dataDir, path)]],
+    ),
+  ) as unknown as BuildInputs;
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {

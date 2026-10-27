@@ -6,6 +6,7 @@ import { ingestSource } from "../application/ingest-source.js";
 import { ingestTcadExport } from "../application/ingest-tcad-export.js";
 import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { SourceId } from "../domain/source-id.js";
+import { TRAVIS_COUNTY_COMPTROLLER_CODE } from "../domain/texas-registry.js";
 import { ArcGisFeatureLayer, FeatureGeometry } from "../infrastructure/arcgis-feature-layer.js";
 import { BbbStateParser } from "../infrastructure/bbb-state-parser.js";
 import { contractorKeysOf } from "../infrastructure/build-tables.js";
@@ -79,7 +80,7 @@ const TEXAS_SNAPSHOTS = {
       "outlet_permit_issue_date",
       "outlet_first_sales_date",
     ],
-    where: "outlet_county_code = '227'",
+    where: `outlet_county_code = '${TRAVIS_COUNTY_COMPTROLLER_CODE}'`,
   },
   [SourceId.TxFranchiseTaxpayers]: {
     datasetId: "9cir-efmm",

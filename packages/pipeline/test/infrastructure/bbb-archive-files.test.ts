@@ -53,11 +53,11 @@ describe("loadArchivedSnapshots", () => {
 });
 
 describe("contractorKeysOf", () => {
-  it("reads the contractor keys of a build", async () => {
+  it("reads the keys of a build's roofing contractors", async () => {
     const buildDir = await mkdtemp(join(tmpdir(), "travis-oracle-keys-"));
     const connection = await (await DuckDBInstance.create(":memory:")).connect();
     await connection.run(
-      `COPY (SELECT * FROM (VALUES ('reliable roofing'), ('lone star roofing')) AS t(contractor_key)) TO '${join(buildDir, "contractors.parquet")}' (FORMAT parquet)`,
+      `COPY (SELECT * FROM (VALUES ('reliable roofing', 12), ('lone star roofing', 1), ('best plumbing', 0)) AS t(contractor_key, roofing_permits)) TO '${join(buildDir, "contractors.parquet")}' (FORMAT parquet)`,
     );
 
     expect(await contractorKeysOf(buildDir)).toEqual(

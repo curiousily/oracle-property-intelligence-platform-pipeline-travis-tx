@@ -112,6 +112,7 @@ export const SOURCE_CATALOG: readonly SourceDescription[] = [
     limitations: [
       "Only businesses that sell or rent taxable items hold a sales tax permit; many service businesses do not appear.",
       "Outlets are linked to properties by normalized street address and ZIP code; suites and free-form addresses can stay unlinked.",
+      "Contractors known on permits only by a person's name are matched to taxpayers by phone only, never by the name alone.",
     ],
   },
   {
@@ -144,7 +145,7 @@ export const SOURCE_CATALOG: readonly SourceDescription[] = [
       "Downloads a new snapshot of the Travis County licenses only when the dataset's rows were updated, 50,000 rows a page.",
     limitations: [
       "Texas does not license roofing contractors, so a TDLR match identifies a contractor's other licensed trades, not a roofing license.",
-      "Licenses are matched to contractors by phone first, then by an unambiguous normalized name.",
+      "Only contractor licenses are kept (electrical, air conditioning, appliance, sign and elevator contractors); a business's licenses are matched together by phone and normalized name.",
     ],
   },
 ];

@@ -14,7 +14,7 @@ export async function contractorKeysOf(buildDir: string | undefined): Promise<Se
   }
   const connection = await (await DuckDBInstance.create(":memory:")).connect();
   const reader = await connection.runAndReadAll(
-    `SELECT DISTINCT contractor_key FROM read_parquet('${table.replaceAll("'", "''")}') WHERE contractor_key IS NOT NULL`,
+    `SELECT DISTINCT contractor_key FROM read_parquet('${table.replaceAll("'", "''")}') WHERE contractor_key IS NOT NULL AND roofing_permits > 0`,
   );
   return new Set(reader.getRows().map(([key]) => String(key)));
 }

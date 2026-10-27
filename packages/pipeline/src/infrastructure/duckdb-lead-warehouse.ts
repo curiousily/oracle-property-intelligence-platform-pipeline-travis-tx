@@ -3,15 +3,21 @@ import { basename, join } from "node:path";
 import { type DuckDBAppender, type DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import type {
   BuildInputs,
+  BusinessAddress,
+  BusinessAddressKey,
   ClassifiedPermit,
   ContractorKey,
+  ContractorLicense,
   ContractorName,
   LeadWarehouse,
+  LicenseMatch,
   OwnerFacts,
   OwnerSignals,
   PermitCandidate,
   PropertyRoofAge,
   PropertyRoofEvidence,
+  RegistryMatch,
+  RegistryTaxpayer,
   TableSummary,
 } from "../application/lead-build-ports.js";
 import type { BbbMatch } from "../domain/bbb-match.js";
@@ -35,6 +41,12 @@ import {
   TCAD_ROOF_STYLE_ATTRIBUTE,
   TcadTable,
 } from "../domain/tcad-export-layout.js";
+import {
+  ACTIVE_RIGHT_TO_TRANSACT,
+  CONTRACTOR_LICENSE_SUFFIX,
+  INSIDE_CITY_LIMITS,
+  TRAVIS_COUNTY_COMPTROLLER_CODE,
+} from "../domain/texas-registry.js";
 
 type Row = Record<string, unknown>;
 
@@ -42,6 +54,9 @@ const BUILDING_PERMIT = "BP";
 const CANDIDATE_WORK_CLASSES = ["new", "roof"];
 const RAW_RUN_ID = String.raw`/(\d{8}T\d{6}Z)/page-`;
 const ISO_DATE = "%Y-%m-%d";
+const LICENSE_EXPIRATION_DATE = "%m/%d/%Y";
+const ZIP_LENGTH = 5;
+const BUSINESS_ID_SEPARATOR = "-";
 const ISO_DATE_LENGTH = "YYYY-MM-DD".length;
 const COVERAGE_FILE = "coverage.json";
 const SAMPLES_DIR = "samples";
@@ -61,6 +76,7 @@ enum ExportTable {
   RoofingPermits = "roofing_permits",
   Properties = "properties",
   Contractors = "contractors",
+  Businesses = "businesses",
 }
 
 const EXPORT_KEYS: Record<ExportTable, string> = {
@@ -68,6 +84,7 @@ const EXPORT_KEYS: Record<ExportTable, string> = {
   [ExportTable.RoofingPermits]: "permit_number",
   [ExportTable.Properties]: "prop_id",
   [ExportTable.Contractors]: "contractor_key",
+  [ExportTable.Businesses]: "business_id",
 };
 
 const PERMIT_COLUMNS = {
@@ -103,6 +120,42 @@ const PERMIT_COLUMNS = {
   link: "STRUCT(url VARCHAR)",
 };
 
+const columnsOf = (...names: string[]) =>
+  Object.fromEntries(names.map((name) => [name, "VARCHAR"]));
+const SALES_TAX_COLUMNS = columnsOf(
+  "taxpayer_number",
+  "taxpayer_name",
+  "taxpayer_organization_type",
+  "taxpayer_zip_code",
+  "outlet_number",
+  "outlet_name",
+  "outlet_address",
+  "outlet_city",
+  "outlet_zip_code",
+  "outlet_naics_code",
+  "outlet_inside_outside_city_limits_indicator",
+  "outlet_permit_issue_date",
+  "outlet_first_sales_date",
+);
+const FRANCHISE_COLUMNS = columnsOf(
+  "taxpayer_number",
+  "taxpayer_name",
+  "taxpayer_organizational_type",
+  "taxpayer_zip",
+  "taxpayer_county_code",
+  "secretary_of_state_sos_or_coa_file_number",
+  "sos_charter_date",
+  "right_to_transact_business_code",
+);
+const LICENSE_COLUMNS = columnsOf(
+  "license_type",
+  "license_number",
+  "license_expiration_date_mmddccyy",
+  "business_name",
+  "owner_telephone",
+  "business_telephone",
+);
+
 const COORDINATE_DECIMALS = 7;
 const TRAVIS_COUNTY_BOUNDS = { south: 29.9, north: 30.7, west: -98.3, east: -97.3 };
 const ADDRESS_POINT_FEATURES =
@@ -132,6 +185,9 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     parcelPages,
     addressPointPages,
     bbbProfiles,
+    salesTaxPages,
+    franchisePages,
+    licensePages,
   }: BuildInputs) {
     this.appraisalRunId = basename(appraisalTablesDir);
     const tcad = (table: TcadTable) => literal(join(appraisalTablesDir, `${table}.parquet`));
@@ -228,6 +284,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
 
     await this.loadCoordinates(addressPointPages);
     await this.loadBbbProfiles(bbbProfiles);
+    await this.loadRegistries(salesTaxPages, franchisePages, licensePages);
 
     return {
       permits: await this.count("permits"),
@@ -235,7 +292,47 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       parcels: await this.count("parcels"),
       addressPoints: await this.count("address_points"),
       bbbProfiles: await this.count("bbb_profiles"),
+      salesTaxOutlets: await this.count("sales_tax_outlets"),
+      franchiseTaxpayers: await this.count("franchise_taxpayers"),
+      contractorLicenses: await this.count("contractor_licenses"),
     };
+  }
+
+  private async loadRegistries(
+    salesTaxPages: string | undefined,
+    franchisePages: string | undefined,
+    licensePages: string | undefined,
+  ): Promise<void> {
+    await this.connection.run(`
+      CREATE TABLE sales_tax_outlets AS
+      SELECT taxpayer_number || ${literal(BUSINESS_ID_SEPARATOR)} || outlet_number AS business_id, *
+      FROM (${snapshotRows(salesTaxPages, SALES_TAX_COLUMNS)})
+      WHERE taxpayer_number IS NOT NULL AND outlet_number IS NOT NULL
+      QUALIFY row_number() OVER (PARTITION BY taxpayer_number, outlet_number ORDER BY source_run_id DESC) = 1;
+
+      CREATE TABLE sales_taxpayers AS
+      SELECT taxpayer_number, min(taxpayer_name) AS taxpayer_name,
+        min(taxpayer_organization_type) AS organization_type, count(*) AS travis_outlets
+      FROM sales_tax_outlets GROUP BY 1;
+
+      CREATE TABLE franchise_taxpayers AS
+      SELECT taxpayer_number, taxpayer_name, taxpayer_organizational_type AS organization_type,
+        taxpayer_zip AS zip, taxpayer_county_code AS county_code,
+        secretary_of_state_sos_or_coa_file_number AS sos_file_number,
+        ${date("sos_charter_date")} AS charter_date,
+        nullif(regexp_replace(right_to_transact_business_code, '[[:space:]]+', '', 'g'), '') AS right_to_transact
+      FROM (${snapshotRows(franchisePages, FRANCHISE_COLUMNS)})
+      WHERE taxpayer_number IS NOT NULL
+      QUALIFY row_number() OVER (PARTITION BY taxpayer_number ORDER BY taxpayer_name, right_to_transact) = 1;
+
+      CREATE TABLE contractor_licenses AS
+      SELECT license_type, license_number, business_name,
+        list_filter([business_telephone, owner_telephone], lambda phone: phone IS NOT NULL) AS phones,
+        CAST(TRY_STRPTIME(license_expiration_date_mmddccyy, ${literal(LICENSE_EXPIRATION_DATE)}) AS DATE) AS expiration_date
+      FROM (${snapshotRows(licensePages, LICENSE_COLUMNS)})
+      WHERE license_type LIKE ${literal(`%${CONTRACTOR_LICENSE_SUFFIX}`)} AND license_number IS NOT NULL
+      QUALIFY row_number() OVER (PARTITION BY license_type, license_number ORDER BY source_run_id DESC) = 1;
+    `);
   }
 
   private async loadBbbProfiles(bbbProfiles: string | undefined): Promise<void> {
@@ -436,11 +533,17 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
 
   async contractorNames(): Promise<ContractorName[]> {
     const rows = await this.rows(`
-      SELECT DISTINCT coalesce(p.contractor_company_name, p.contractor_full_name) AS name, p.contractor_phone AS phone
-      FROM permits p JOIN permit_roof_work w USING (permit_number)
-      WHERE w.roof_work IN (${list(ROOFING_WORK)})
+      SELECT coalesce(contractor_company_name, contractor_full_name) AS name, contractor_phone AS phone,
+        bool_or(contractor_company_name IS NOT NULL) AS company
+      FROM permits
+      WHERE coalesce(contractor_company_name, contractor_full_name) IS NOT NULL
+      GROUP BY 1, 2
     `);
-    return rows.map((row) => ({ name: text(row.name), phone: text(row.phone) }));
+    return rows.map((row) => ({
+      name: text(row.name),
+      phone: text(row.phone),
+      company: row.company === true,
+    }));
   }
 
   async saveContractorKeys(rows: readonly ContractorKey[]): Promise<void> {
@@ -487,10 +590,97 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     });
   }
 
+  async *registryTaxpayers(): AsyncIterable<RegistryTaxpayer[]> {
+    const reader = await this.connection.stream(`
+      WITH names AS (
+        SELECT taxpayer_number, taxpayer_name AS name, zip,
+          county_code = ${literal(TRAVIS_COUNTY_COMPTROLLER_CODE)} AS in_travis_county
+        FROM franchise_taxpayers
+        UNION ALL SELECT taxpayer_number, taxpayer_name, taxpayer_zip_code, true FROM sales_tax_outlets
+        UNION ALL SELECT taxpayer_number, outlet_name, outlet_zip_code, true FROM sales_tax_outlets
+      )
+      SELECT taxpayer_number,
+        list(DISTINCT name) FILTER (WHERE name IS NOT NULL) AS names,
+        list(DISTINCT zip) FILTER (WHERE zip IS NOT NULL) AS zips,
+        coalesce(bool_or(in_travis_county), false) AS in_travis_county
+      FROM names GROUP BY 1
+    `);
+    for await (const rows of reader.yieldRowObjectJs()) {
+      yield rows.map((row) => ({
+        taxpayerNumber: String(row.taxpayer_number),
+        names: (row.names as string[] | null) ?? [],
+        zips: (row.zips as string[] | null) ?? [],
+        inTravisCounty: row.in_travis_county === true,
+      }));
+    }
+  }
+
+  async saveRegistryMatches(rows: readonly RegistryMatch[]): Promise<void> {
+    await this.connection.run(
+      "CREATE OR REPLACE TABLE registry_matches (contractor_key VARCHAR, taxpayer_number VARCHAR, match_method VARCHAR, match_confidence VARCHAR)",
+    );
+    await this.append("registry_matches", rows, (appender, row) => {
+      appender.appendVarchar(row.contractorKey);
+      appender.appendVarchar(row.taxpayerNumber);
+      appender.appendVarchar(row.method);
+      appender.appendVarchar(row.confidence);
+    });
+  }
+
+  async contractorLicenses(): Promise<ContractorLicense[]> {
+    const rows = await this.rows(
+      "SELECT license_type, license_number, business_name, phones FROM contractor_licenses ORDER BY 1, 2",
+    );
+    return rows.map((row) => ({
+      licenseType: String(row.license_type),
+      licenseNumber: String(row.license_number),
+      businessName: text(row.business_name),
+      phones: (row.phones as string[] | null) ?? [],
+    }));
+  }
+
+  async saveLicenseMatches(rows: readonly LicenseMatch[]): Promise<void> {
+    await this.connection.run(
+      "CREATE OR REPLACE TABLE license_matches (contractor_key VARCHAR, license_type VARCHAR, license_number VARCHAR, match_method VARCHAR, match_confidence VARCHAR)",
+    );
+    await this.append("license_matches", rows, (appender, row) => {
+      appender.appendVarchar(row.contractorKey);
+      appender.appendVarchar(row.licenseType);
+      appender.appendVarchar(row.licenseNumber);
+      appender.appendVarchar(row.method);
+      appender.appendVarchar(row.confidence);
+    });
+  }
+
+  async businessAddresses(): Promise<BusinessAddress[]> {
+    const rows = await this.rows(
+      "SELECT business_id, outlet_address FROM sales_tax_outlets ORDER BY business_id",
+    );
+    return rows.map((row) => ({
+      businessId: String(row.business_id),
+      address: text(row.outlet_address),
+    }));
+  }
+
+  async saveBusinessAddressKeys(rows: readonly BusinessAddressKey[]): Promise<void> {
+    await this.connection.run(
+      "CREATE OR REPLACE TABLE business_address_keys (business_id VARCHAR, address_key VARCHAR)",
+    );
+    await this.append("business_address_keys", rows, (appender, row) => {
+      appender.appendVarchar(row.businessId);
+      appender.appendVarchar(row.addressKey);
+    });
+  }
+
   async exportTables(outputDir: string, previousDir: string | undefined): Promise<TableSummary[]> {
     await this.connection.run(`
       CREATE OR REPLACE VIEW export_permits AS
-        SELECT p.*, l.prop_id, l.link_status FROM permits p JOIN permit_links l USING (permit_number);
+        SELECT p.*, l.prop_id, l.link_status, k.contractor_key
+        FROM permits p
+        JOIN permit_links l USING (permit_number)
+        LEFT JOIN contractor_keys k
+          ON k.name = coalesce(p.contractor_company_name, p.contractor_full_name)
+          AND k.phone IS NOT DISTINCT FROM p.contractor_phone;
 
       CREATE OR REPLACE VIEW export_roofing_permits AS
       SELECT
@@ -569,25 +759,90 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       CREATE OR REPLACE VIEW export_contractors AS
       WITH permit_history AS (
         SELECT contractor_key,
-          list(DISTINCT contractor_name ORDER BY contractor_name) AS names,
+          list(DISTINCT coalesce(contractor_company_name, contractor_full_name) ORDER BY coalesce(contractor_company_name, contractor_full_name)) AS names,
           list(DISTINCT contractor_phone ORDER BY contractor_phone) FILTER (WHERE contractor_phone IS NOT NULL) AS phones,
-          count(*) AS roofing_permits,
-          count(*) FILTER (WHERE unfinished) AS unfinished_roofing_permits,
+          list(DISTINCT contractor_trade ORDER BY contractor_trade) FILTER (WHERE contractor_trade IS NOT NULL) AS trades,
+          count(*) AS permits,
           count(DISTINCT prop_id) AS properties,
           min(issue_date) AS first_issue_date, max(issue_date) AS last_issue_date
+        FROM export_permits
+        WHERE contractor_key IS NOT NULL
+        GROUP BY 1
+      ), roofing AS (
+        SELECT contractor_key, count(*) AS roofing_permits,
+          count(*) FILTER (WHERE unfinished) AS unfinished_roofing_permits
         FROM export_roofing_permits
         WHERE contractor_key IS NOT NULL
         GROUP BY 1
+      ), licenses AS (
+        SELECT m.contractor_key,
+          list(m.license_type ORDER BY m.license_type, m.license_number) AS license_types,
+          list(m.license_number ORDER BY m.license_type, m.license_number) AS license_numbers,
+          max(l.expiration_date) AS license_expiration_date,
+          min(m.match_method) AS license_match_method, min(m.match_confidence) AS license_match_confidence
+        FROM license_matches m JOIN contractor_licenses l USING (license_type, license_number)
+        GROUP BY 1
       )
-      SELECT permit_history.*,
+      SELECT h.contractor_key, h.names, h.phones, h.trades, h.permits,
+        coalesce(r.roofing_permits, 0) AS roofing_permits,
+        coalesce(r.unfinished_roofing_permits, 0) AS unfinished_roofing_permits,
+        h.properties, h.first_issue_date, h.last_issue_date,
         bbb.rating AS bbb_rating, bbb.accredited AS bbb_accredited, bbb.accredited_since AS bbb_accredited_since,
         bbb.out_of_business AS bbb_out_of_business, bbb.business_name AS bbb_business_name,
         bbb.profile_url AS bbb_profile_url, bbb.snapshot_url AS bbb_snapshot_url,
         ${snapshotDate("bbb.snapshot_at")} AS bbb_snapshot_date,
-        match.match_method AS bbb_match_method, match.match_confidence AS bbb_match_confidence
-      FROM permit_history
+        match.match_method AS bbb_match_method, match.match_confidence AS bbb_match_confidence,
+        registry.taxpayer_number AS registry_taxpayer_number,
+        coalesce(franchise.taxpayer_name, sales.taxpayer_name) AS registry_name,
+        coalesce(franchise.organization_type, sales.organization_type) AS registry_organization_type,
+        ${rightToTransact("franchise")} AS registry_active,
+        franchise.sos_file_number AS registry_sos_file_number, franchise.charter_date AS registry_charter_date,
+        CASE WHEN registry.taxpayer_number IS NOT NULL THEN coalesce(sales.travis_outlets, 0) END AS registry_travis_outlets,
+        registry.match_method AS registry_match_method, registry.match_confidence AS registry_match_confidence,
+        licenses.license_types, licenses.license_numbers, licenses.license_expiration_date,
+        licenses.license_match_method, licenses.license_match_confidence
+      FROM permit_history h
+      LEFT JOIN roofing r USING (contractor_key)
       LEFT JOIN bbb_matches match USING (contractor_key)
-      LEFT JOIN bbb_profiles bbb ON bbb.profile_id = match.profile_id;
+      LEFT JOIN bbb_profiles bbb ON bbb.profile_id = match.profile_id
+      LEFT JOIN registry_matches registry USING (contractor_key)
+      LEFT JOIN franchise_taxpayers franchise ON franchise.taxpayer_number = registry.taxpayer_number
+      LEFT JOIN sales_taxpayers sales ON sales.taxpayer_number = registry.taxpayer_number
+      LEFT JOIN licenses USING (contractor_key);
+
+      CREATE OR REPLACE VIEW export_businesses AS
+      WITH situs AS (
+        SELECT keys.address_key, left(p.situs_zip, ${ZIP_LENGTH}) AS zip, keys.prop_id
+        FROM property_address_keys keys JOIN tcad_properties p USING (prop_id)
+      ), linked AS (
+        SELECT b.business_id, CASE WHEN count(DISTINCT s.prop_id) = 1 THEN min(s.prop_id) END AS prop_id
+        FROM business_address_keys b
+        JOIN sales_tax_outlets o USING (business_id)
+        JOIN situs s ON s.address_key = b.address_key AND s.zip = left(o.outlet_zip_code, ${ZIP_LENGTH})
+        GROUP BY 1
+      )
+      SELECT o.business_id, o.taxpayer_number, o.taxpayer_name,
+        o.taxpayer_organization_type AS organization_type, o.outlet_number, o.outlet_name,
+        o.outlet_address AS address, o.outlet_city AS city, left(o.outlet_zip_code, ${ZIP_LENGTH}) AS zip,
+        o.outlet_naics_code AS naics_code,
+        o.outlet_inside_outside_city_limits_indicator = ${literal(INSIDE_CITY_LIMITS)} AS inside_city_limits,
+        ${date("o.outlet_permit_issue_date")} AS permit_issue_date,
+        ${date("o.outlet_first_sales_date")} AS first_sales_date,
+        ${rightToTransact("franchise")} AS registry_active,
+        franchise.sos_file_number, linked.prop_id,
+        coalesce(property.latitude, point.latitude) AS latitude,
+        coalesce(property.longitude, point.longitude) AS longitude,
+        CASE
+          WHEN property.latitude IS NOT NULL THEN property.coordinate_source
+          WHEN point.latitude IS NOT NULL THEN ${literal(CoordinateSource.AddressPoint)}
+        END AS coordinate_source,
+        ${literal(SourceId.TxSalesTaxPermits)} AS source, o.source_run_id
+      FROM sales_tax_outlets o
+      LEFT JOIN linked USING (business_id)
+      LEFT JOIN property_coordinates property ON property.prop_id = linked.prop_id
+      LEFT JOIN business_address_keys keys USING (business_id)
+      LEFT JOIN address_point_keys point ON point.address_key = keys.address_key
+      LEFT JOIN franchise_taxpayers franchise ON franchise.taxpayer_number = o.taxpayer_number;
     `);
 
     await mkdir(outputDir, { recursive: true });
@@ -635,8 +890,22 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       },
       contractors: {
         rows: await this.count("export_contractors"),
+        with_roofing_permits: await this.countWhere("export_contractors", "roofing_permits > 0"),
         with_bbb_rating: await this.countWhere("export_contractors", "bbb_rating IS NOT NULL"),
         bbb_match_method: await this.histogram("export_contractors", "bbb_match_method"),
+        with_registry_match: await this.countWhere(
+          "export_contractors",
+          "registry_taxpayer_number IS NOT NULL",
+        ),
+        registry_match_method: await this.histogram("export_contractors", "registry_match_method"),
+        with_license: await this.countWhere("export_contractors", "license_types IS NOT NULL"),
+        license_match_method: await this.histogram("export_contractors", "license_match_method"),
+      },
+      businesses: {
+        rows: await this.count("export_businesses"),
+        with_property: await this.countWhere("export_businesses", "prop_id IS NOT NULL"),
+        with_coordinates: await this.countWhere("export_businesses", "latitude IS NOT NULL"),
+        coordinate_source: await this.histogram("export_businesses", "coordinate_source"),
       },
     };
     await writeFile(join(outputDir, COVERAGE_FILE), `${JSON.stringify(coverage, null, 2)}\n`);
@@ -846,6 +1115,19 @@ function numbers(row: Row | undefined): Record<string, number> {
 function addressKey(number: string, prefix: string, street: string, streetType: string): string {
   const part = (column: string) => `coalesce(nullif(upper(trim(${column})), ''), '')`;
   return `concat_ws('|', ${part(number)}, ${part(prefix)}, ${part(street)}, coalesce(alias.canonical, ${part(streetType)}))`;
+}
+
+function snapshotRows(pages: string | undefined, columns: Record<string, string>): string {
+  if (pages === undefined) {
+    const empty = Object.entries(columns).map(([name, type]) => `CAST(NULL AS ${type}) AS ${name}`);
+    return `SELECT ${empty.join(", ")}, CAST(NULL AS VARCHAR) AS source_run_id WHERE false`;
+  }
+  return `SELECT * EXCLUDE (filename), regexp_extract(filename, ${literal(RAW_RUN_ID)}, 1) AS source_run_id
+    FROM read_json(${literal(pages)}, format = 'array', filename = true, columns = ${structLiteral(columns)})`;
+}
+
+function rightToTransact(franchise: string): string {
+  return `CASE WHEN ${franchise}.taxpayer_number IS NOT NULL THEN coalesce(${franchise}.right_to_transact = ${literal(ACTIVE_RIGHT_TO_TRANSACT)}, false) END`;
 }
 
 function snapshotDate(column: string): string {

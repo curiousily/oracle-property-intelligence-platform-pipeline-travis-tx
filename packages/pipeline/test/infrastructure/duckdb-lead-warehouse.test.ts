@@ -14,6 +14,7 @@ const OLDER_RUN = "20261026T000000Z";
 const LATEST_RUN = "20261027T000000Z";
 const APPRAISAL_RUN = "20261027T100000Z";
 const PARCEL_RUN = "20261027T110000Z";
+const REGISTRY_RUN = "20261027T120000Z";
 
 type Row = Record<string, unknown>;
 
@@ -83,7 +84,10 @@ const LATEST_PERMITS = [
     permit_number: "2022-000007 BP",
     description: "Kitchen remodel",
     status_current: "Final",
+    issue_date: "2022-02-02T00:00:00.000",
     tcad_id: "0100000002",
+    contractor_trade: "General Contractor",
+    contractor_company_name: "Best Homes LLC",
   }),
   permit({
     permit_number: "2001-000009 BP",
@@ -188,6 +192,103 @@ const BBB_RECORDS = [
   bbbRecord("20260801000000", null),
 ];
 
+const outlet = (fields: Row): Row => ({
+  taxpayer_state: "TX",
+  outlet_state: "TX",
+  outlet_county_code: "227",
+  outlet_inside_outside_city_limits_indicator: "Y",
+  outlet_number: "00001",
+  ...fields,
+});
+const SALES_TAX_OUTLETS = [
+  outlet({
+    ":id": "row-1",
+    taxpayer_number: "32042636673",
+    taxpayer_name: "RELIABLE ROOFING OF TEXAS, INC.",
+    taxpayer_organization_type: "CT",
+    taxpayer_zip_code: "78704",
+    outlet_name: "RELIABLE ROOFING",
+    outlet_address: "1201 LAMAR BLVD STE 200",
+    outlet_city: "AUSTIN",
+    outlet_zip_code: "78704",
+    outlet_naics_code: "238160",
+    outlet_permit_issue_date: "2015-08-04T00:00:00.000",
+    outlet_first_sales_date: "2015-08-01T00:00:00.000",
+  }),
+  outlet({
+    ":id": "row-2",
+    taxpayer_number: "17000000001",
+    taxpayer_name: "PINE CAFE LLC",
+    outlet_name: "PINE CAFE",
+    outlet_address: "77 Pine Street",
+    outlet_zip_code: "78703",
+  }),
+  outlet({
+    ":id": "row-3",
+    taxpayer_number: "17000000002",
+    taxpayer_name: "ELM SALON",
+    outlet_address: "5 ELM ST UNIT 101",
+    outlet_zip_code: "78701",
+  }),
+  outlet({
+    ":id": "row-4",
+    taxpayer_number: "17000000003",
+    taxpayer_name: "ELM TERRACE GOODS",
+    outlet_address: "500 ELM TER",
+    outlet_zip_code: "78702",
+    outlet_inside_outside_city_limits_indicator: "N",
+  }),
+  outlet({
+    ":id": "row-5",
+    taxpayer_number: "17000000004",
+    taxpayer_name: "MAILBOX ONLY",
+    outlet_address: "PO BOX 5",
+    outlet_zip_code: "78701",
+  }),
+];
+const FRANCHISE_TAXPAYERS = [
+  {
+    ":id": "row-1",
+    taxpayer_number: "32042636673",
+    taxpayer_name: "RELIABLE ROOFING OF TEXAS, INC.",
+    taxpayer_organizational_type: "CT",
+    taxpayer_zip: "78704",
+    taxpayer_county_code: "227",
+    secretary_of_state_sos_or_coa_file_number: "0801318566",
+    sos_charter_date: "2010-09-15T00:00:00.000",
+    right_to_transact_business_code: "A ",
+  },
+  {
+    ":id": "row-2",
+    taxpayer_number: "32000000099",
+    taxpayer_name: "BEST HOMES, LLC",
+    taxpayer_organizational_type: "CL",
+    taxpayer_zip: "75201",
+    taxpayer_county_code: "057",
+    right_to_transact_business_code: "N",
+  },
+];
+const TDLR_LICENSES = [
+  {
+    ":id": "row-1",
+    license_type: "A/C Contractor",
+    license_number: "136",
+    license_expiration_date_mmddccyy: "04/27/2027",
+    business_name: "RELIABLE ROOFING INC",
+    owner_name: "DOE, JOHN",
+    business_telephone: "512-555-0142",
+    business_county: "TRAVIS",
+  },
+  {
+    ":id": "row-2",
+    license_type: "Apprentice Electrician",
+    license_number: "990001",
+    license_expiration_date_mmddccyy: "01/31/2027",
+    owner_name: "ROE, RICHARD",
+    business_county: "TRAVIS",
+  },
+];
+
 async function writeGzipJson(path: string, value: unknown) {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, gzipSync(JSON.stringify(value)));
@@ -286,7 +387,15 @@ beforeAll(async () => {
     BBB_RECORDS.map((record) => `${JSON.stringify(record)}\n`).join(""),
   );
 
+  const registryPages = async (source: string, rows: Row[]) => {
+    await writeGzipJson(join(dataDir, "raw", source, REGISTRY_RUN, "page-00001.json.gz"), rows);
+    return join(dataDir, "raw", source, REGISTRY_RUN, "page-*.json.gz");
+  };
+
   inputs = {
+    salesTaxPages: await registryPages("tx-sales-tax-permits", SALES_TAX_OUTLETS),
+    franchisePages: await registryPages("tx-franchise-taxpayers", FRANCHISE_TAXPAYERS),
+    licensePages: await registryPages("tdlr-licenses", TDLR_LICENSES),
     permitPages: join(permitsDir, "*", "page-*.json.gz"),
     appraisalTablesDir,
     parcelPages: join(dataDir, "raw", "tcad-parcels", PARCEL_RUN, "page-*.json.gz"),
@@ -304,6 +413,9 @@ describe("DuckDbLeadWarehouse", () => {
       parcels: 3,
       addressPoints: 3,
       bbbProfiles: 1,
+      salesTaxOutlets: 5,
+      franchiseTaxpayers: 2,
+      contractorLicenses: 1,
     });
   });
 
@@ -324,6 +436,7 @@ describe("DuckDbLeadWarehouse", () => {
       source_run_id: LATEST_RUN,
       prop_id: "100008",
       link_status: "linked",
+      contractor_key: "reliable roofing",
     });
   });
 
@@ -446,19 +559,111 @@ describe("DuckDbLeadWarehouse", () => {
     expect(properties.find((row) => row.prop_id === "100030")?.coordinate_source).toBeNull();
   });
 
-  it("groups contractor name variants under one key", async () => {
+  it("keeps every permit contractor, grouping name variants under one key", async () => {
     const contractors = await readTable("build-1", "contractors", "contractor_key");
 
-    expect(contractors).toHaveLength(1);
-    expect(contractors[0]).toMatchObject({
+    expect(contractors.map((row) => row.contractor_key)).toEqual([
+      "best homes",
+      "reliable roofing",
+    ]);
+    expect(contractors[1]).toMatchObject({
       contractor_key: "reliable roofing",
+      permits: "2",
       roofing_permits: "2",
       unfinished_roofing_permits: "1",
       properties: "1",
     });
-    expect(contractors[0]?.names).toEqual(
+    expect(contractors[1]?.names).toEqual(
       expect.arrayContaining(["RELIABLE ROOFING OF TEXAS INC", "Reliable Roofing, Inc."]),
     );
+    expect(contractors[0]).toMatchObject({
+      permits: "1",
+      roofing_permits: "0",
+      trades: ["General Contractor"],
+      first_issue_date: "2022-02-02",
+    });
+  });
+
+  it("resolves contractors to Texas Comptroller taxpayers and TDLR licenses", async () => {
+    const [bestHomes, reliable] = await readTable("build-1", "contractors", "contractor_key");
+
+    expect(reliable).toMatchObject({
+      registry_taxpayer_number: "32042636673",
+      registry_name: "RELIABLE ROOFING OF TEXAS, INC.",
+      registry_organization_type: "CT",
+      registry_active: true,
+      registry_sos_file_number: "0801318566",
+      registry_charter_date: "2010-09-15",
+      registry_travis_outlets: "1",
+      registry_match_method: "name",
+      registry_match_confidence: "medium",
+      license_types: ["A/C Contractor"],
+      license_numbers: ["136"],
+      license_expiration_date: "2027-04-27",
+      license_match_method: "name_and_phone",
+      license_match_confidence: "high",
+    });
+    expect(bestHomes).toMatchObject({
+      registry_taxpayer_number: "32000000099",
+      registry_active: false,
+      registry_travis_outlets: "0",
+      license_types: null,
+    });
+  });
+
+  it("publishes Travis County sales tax outlets as businesses linked to the property at their address", async () => {
+    const businesses = await readTable("build-1", "businesses", "business_id");
+
+    expect(businesses.map((row) => [row.business_id, row.prop_id, row.coordinate_source])).toEqual([
+      ["17000000001-00001", "100040", "permit"],
+      ["17000000002-00001", null, null],
+      ["17000000003-00001", "100030", "address_point"],
+      ["17000000004-00001", null, null],
+      ["32042636673-00001", "100008", "parcel_centroid"],
+    ]);
+    expect(businesses[4]).toMatchObject({
+      taxpayer_number: "32042636673",
+      taxpayer_name: "RELIABLE ROOFING OF TEXAS, INC.",
+      organization_type: "CT",
+      outlet_name: "RELIABLE ROOFING",
+      address: "1201 LAMAR BLVD STE 200",
+      city: "AUSTIN",
+      zip: "78704",
+      naics_code: "238160",
+      inside_city_limits: true,
+      permit_issue_date: "2015-08-04",
+      first_sales_date: "2015-08-01",
+      registry_active: true,
+      latitude: 30.26,
+      longitude: -97.75,
+      source: "tx-sales-tax-permits",
+      source_run_id: REGISTRY_RUN,
+    });
+    expect(businesses[2]?.inside_city_limits).toBe(false);
+  });
+
+  it("still builds without the Texas registries", async () => {
+    const { salesTaxPages, franchisePages, licensePages, ...withoutRegistries } = inputs;
+    const warehouse = await DuckDbLeadWarehouse.open();
+    try {
+      await buildLeadTables(warehouse, {
+        buildId: "build-without-registries",
+        asOf: AS_OF,
+        inputs: withoutRegistries,
+        outputDir: join(dataDir, "build", "build-without-registries"),
+        previousDir: undefined,
+      });
+    } finally {
+      warehouse.close();
+    }
+
+    expect(await readTable("build-without-registries", "businesses", "business_id")).toEqual([]);
+    const contractors = await readTable(
+      "build-without-registries",
+      "contractors",
+      "contractor_key",
+    );
+    expect(contractors.map((row) => row.registry_taxpayer_number)).toEqual([null, null]);
   });
 
   it("writes a coverage report with fill rates for the fields leads depend on", async () => {
@@ -503,7 +708,8 @@ describe("DuckDbLeadWarehouse", () => {
   });
 
   it("carries the latest archived BBB grade onto the contractor and its roofing permits", async () => {
-    const [contractor] = await readTable("build-1", "contractors", "contractor_key");
+    const contractors = await readTable("build-1", "contractors", "contractor_key");
+    const contractor = contractors.find((row) => row.contractor_key === "reliable roofing");
     expect(contractor).toMatchObject({
       contractor_key: "reliable roofing",
       bbb_rating: "A+",
@@ -527,9 +733,20 @@ describe("DuckDbLeadWarehouse", () => {
       await readFile(join(dataDir, "build", "build-1", "coverage.json"), "utf8"),
     );
     expect(coverage.contractors).toMatchObject({
-      rows: 1,
+      rows: 2,
+      with_roofing_permits: 1,
       with_bbb_rating: 1,
       bbb_match_method: { name_and_phone: 1 },
+      with_registry_match: 2,
+      registry_match_method: { name: 2 },
+      with_license: 1,
+      license_match_method: { name_and_phone: 1 },
+    });
+    expect(coverage.businesses).toMatchObject({
+      rows: 5,
+      with_property: 3,
+      with_coordinates: 3,
+      coordinate_source: { address_point: 1, parcel_centroid: 1, permit: 1 },
     });
   });
 
@@ -561,7 +778,7 @@ describe("DuckDbLeadWarehouse", () => {
     const rebuilt = await build("build-after-bbb", "build-before-bbb");
 
     expect(rebuilt.tables).toEqual(
-      expect.arrayContaining([{ table: "contractors", rows: 1, added: 0, changed: 0, removed: 0 }]),
+      expect.arrayContaining([{ table: "contractors", rows: 2, added: 0, changed: 0, removed: 0 }]),
     );
   });
 
@@ -592,7 +809,7 @@ describe("DuckDbLeadWarehouse", () => {
     await build("build-5");
     await build("build-6");
 
-    for (const table of ["permits", "roofing_permits", "properties", "contractors"]) {
+    for (const table of ["permits", "roofing_permits", "properties", "contractors", "businesses"]) {
       const digest = async (buildId: string) =>
         createHash("sha256")
           .update(await readFile(join(dataDir, "build", buildId, `${table}.parquet`)))
