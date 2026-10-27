@@ -18,6 +18,7 @@ export async function runBuild(
     join(dataDir, TABLES_DIR, SourceId.TcadAppraisalExport),
   );
   const parcelRun = await latestRunDir(join(dataDir, RAW_DIR, SourceId.TcadParcels));
+  const addressPointRun = await latestRunDir(join(dataDir, RAW_DIR, SourceId.TravisAddressPoints));
   if (appraisalTablesDir === undefined || parcelRun === undefined) {
     throw new Error("build needs an ingested TCAD appraisal export and a TCAD parcel snapshot");
   }
@@ -28,6 +29,7 @@ export async function runBuild(
     permitPages: join(dataDir, RAW_DIR, SourceId.AustinPermits, "*", RAW_PAGE_GLOB),
     appraisalTablesDir,
     parcelPages: join(parcelRun, RAW_PAGE_GLOB),
+    ...(addressPointRun && { addressPointPages: join(addressPointRun, RAW_PAGE_GLOB) }),
   };
 
   const warehouse = await DuckDbLeadWarehouse.open();
@@ -45,6 +47,9 @@ export async function runBuild(
         permitPages: relative(dataDir, inputs.permitPages),
         appraisalTablesDir: relative(dataDir, inputs.appraisalTablesDir),
         parcelPages: relative(dataDir, inputs.parcelPages),
+        ...(inputs.addressPointPages && {
+          addressPointPages: relative(dataDir, inputs.addressPointPages),
+        }),
       },
     };
     await writeFile(join(outputDir, BUILD_RESULT_FILE), `${JSON.stringify(portable, null, 2)}\n`);

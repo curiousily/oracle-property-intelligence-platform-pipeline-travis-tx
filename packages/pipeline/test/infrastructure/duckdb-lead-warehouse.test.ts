@@ -94,6 +94,14 @@ const LATEST_PERMITS = [
     completed_date: "2001-06-01T00:00:00.000",
     tcad_id: "0100000002",
   }),
+  permit({
+    permit_number: "2023-000010 BP",
+    description: "Kitchen remodel",
+    status_current: "Final",
+    tcad_id: "0100000004",
+    latitude: "30.2901",
+    longitude: "-97.7301",
+  }),
 ];
 
 const parcelPage = (features: Row[]) => ({ features, exceededTransferLimit: false });
@@ -109,6 +117,43 @@ const PARCELS = parcelPage([
   {
     attributes: { PROP_ID: 100012, PID_10: "0100000002", Shape__Area: 7000 },
     centroid: { x: -97.7, y: 30.3 },
+  },
+  {
+    attributes: { PROP_ID: 999999, PID_10: "0100000003", Shape__Area: 20000 },
+    centroid: { x: -97.65, y: 30.25 },
+  },
+]);
+
+const ADDRESS_POINTS = parcelPage([
+  {
+    attributes: {
+      OBJECTID: 1,
+      ADDRESS: 500,
+      PREFIX_DIRECTION: " ",
+      STREET_NAME: "ELM",
+      STREET_TYPE: "TER",
+    },
+    geometry: { x: -97.71, y: 30.31 },
+  },
+  {
+    attributes: {
+      OBJECTID: 2,
+      ADDRESS: 77,
+      PREFIX_DIRECTION: null,
+      STREET_NAME: "PINE",
+      STREET_TYPE: "ST",
+    },
+    geometry: { x: -97.73, y: 30.29 },
+  },
+  {
+    attributes: {
+      OBJECTID: 3,
+      ADDRESS: 77,
+      PREFIX_DIRECTION: null,
+      STREET_NAME: "PINE",
+      STREET_TYPE: "ST",
+    },
+    geometry: { x: -97.9, y: 30.5 },
   },
 ]);
 
@@ -131,6 +176,8 @@ async function writeAppraisalTables(dir: string) {
       (100012::BIGINT, 'R', '0100000002', 'JANE OWNER', '12 OAK ST', NULL, NULL, 'AUSTIN', 'TX', '78704', NULL, '12', NULL, 'OAK', 'ST', NULL, 'AUSTIN', '78704', DATE '0021-04-22', 500000::BIGINT, 450000::BIGINT, true, 0.2, 3::BIGINT),
       (100020::BIGINT, 'R', '0100000003', 'CONDO OWNER A', '5 ELM', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '5', NULL, 'ELM', 'ST', '101', 'AUSTIN', '78701', NULL, 300000::BIGINT, 300000::BIGINT, true, NULL, 4::BIGINT),
       (100021::BIGINT, 'MH', '0100000003', 'CONDO OWNER B', '5 ELM', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '5', NULL, 'ELM', 'ST', '102', 'AUSTIN', '78701', NULL, 300000::BIGINT, 300000::BIGINT, true, NULL, 5::BIGINT),
+      (100030::BIGINT, 'R', '0100000005', 'ELM OWNER', '500 ELM TER', NULL, NULL, 'AUSTIN', 'TX', '78702', NULL, '500', NULL, 'ELM', 'TERR', NULL, 'AUSTIN', '78702', NULL, 200000::BIGINT, 200000::BIGINT, true, 0.1, 7::BIGINT),
+      (100040::BIGINT, 'R', '0100000004', 'PINE OWNER', '77 PINE ST', NULL, NULL, 'AUSTIN', 'TX', '78703', NULL, '77', NULL, 'PINE', 'ST', NULL, 'AUSTIN', '78703', NULL, 250000::BIGINT, 250000::BIGINT, true, 0.1, 8::BIGINT),
       (900001::BIGINT, 'P', '0100000009', 'SOME BUSINESS', '9 MAIN', NULL, NULL, 'AUSTIN', 'TX', '78701', NULL, '9', NULL, 'MAIN', 'ST', NULL, 'AUSTIN', '78701', NULL, 1000::BIGINT, 1000::BIGINT, false, NULL, 6::BIGINT)
     ) AS t(prop_id, prop_type_cd, geo_id, py_owner_name, py_addr_line1, py_addr_line2, py_addr_line3, py_addr_city, py_addr_state, py_addr_zip, py_addr_country, situs_num, situs_street_prefx, situs_street, situs_street_suffix, situs_unit, situs_city, situs_zip, deed_dt, market_value, appraised_val, hs_exempt, land_acres, py_owner_id)`,
   );
@@ -195,6 +242,10 @@ beforeAll(async () => {
     join(dataDir, "raw", "tcad-parcels", PARCEL_RUN, "page-00001.json.gz"),
     PARCELS,
   );
+  await writeGzipJson(
+    join(dataDir, "raw", "travis-address-points", PARCEL_RUN, "page-00001.json.gz"),
+    ADDRESS_POINTS,
+  );
   const appraisalTablesDir = join(dataDir, "tables", "tcad-appraisal-export", APPRAISAL_RUN);
   await writeAppraisalTables(appraisalTablesDir);
 
@@ -202,13 +253,14 @@ beforeAll(async () => {
     permitPages: join(permitsDir, "*", "page-*.json.gz"),
     appraisalTablesDir,
     parcelPages: join(dataDir, "raw", "tcad-parcels", PARCEL_RUN, "page-*.json.gz"),
+    addressPointPages: join(dataDir, "raw", "travis-address-points", PARCEL_RUN, "page-*.json.gz"),
   };
   result = await build("build-1");
 });
 
 describe("DuckDbLeadWarehouse", () => {
   it("counts the latest permit versions, the county's real property and its parcels", () => {
-    expect(result.sourceRows).toEqual({ permits: 6, properties: 4, parcels: 2 });
+    expect(result.sourceRows).toEqual({ permits: 7, properties: 6, parcels: 3, addressPoints: 3 });
   });
 
   it("keeps the latest version of every permit with its source run", async () => {
@@ -221,6 +273,7 @@ describe("DuckDbLeadWarehouse", () => {
       "2020-000005 BP",
       "2021-000006 EP",
       "2022-000007 BP",
+      "2023-000010 BP",
     ]);
     expect(permits.find((row) => row.permit_number === "2016-023376 BP")).toMatchObject({
       status: "Expired",
@@ -265,7 +318,14 @@ describe("DuckDbLeadWarehouse", () => {
   it("builds one lead row per property, keeping every partial owner, with roof, owner and location evidence", async () => {
     const properties = await readTable("build-1", "properties", "prop_id");
 
-    expect(properties.map((row) => row.prop_id)).toEqual(["100008", "100012", "100020", "100021"]);
+    expect(properties.map((row) => row.prop_id)).toEqual([
+      "100008",
+      "100012",
+      "100020",
+      "100021",
+      "100030",
+      "100040",
+    ]);
     expect(properties[0]).toMatchObject({
       situs_address: "1201 LAMAR BLVD",
       owner_name: "DJB INVESTMENT PROPERTY LLC",
@@ -301,6 +361,47 @@ describe("DuckDbLeadWarehouse", () => {
     });
   });
 
+  it("locates properties without their own parcel through a shared parcel, an address point or a permit", async () => {
+    const properties = await readTable("build-1", "properties", "prop_id");
+    const located = (propId: string) => properties.find((row) => row.prop_id === propId);
+
+    expect(located("100020")).toMatchObject({
+      latitude: 30.25,
+      longitude: -97.65,
+      coordinate_source: "shared_parcel_centroid",
+    });
+    expect(located("100021")?.coordinate_source).toBe("shared_parcel_centroid");
+    expect(located("100030")).toMatchObject({
+      latitude: 30.31,
+      longitude: -97.71,
+      coordinate_source: "address_point",
+    });
+    expect(located("100040")).toMatchObject({
+      latitude: 30.2901,
+      longitude: -97.7301,
+      coordinate_source: "permit",
+    });
+  });
+
+  it("still builds when no address points were ingested", async () => {
+    const { addressPointPages: _ignored, ...withoutAddressPoints } = inputs;
+    const warehouse = await DuckDbLeadWarehouse.open();
+    try {
+      const built = await buildLeadTables(warehouse, {
+        buildId: "build-without-points",
+        asOf: AS_OF,
+        inputs: withoutAddressPoints,
+        outputDir: join(dataDir, "build", "build-without-points"),
+        previousDir: undefined,
+      });
+      expect(built.sourceRows.addressPoints).toBe(0);
+    } finally {
+      warehouse.close();
+    }
+    const properties = await readTable("build-without-points", "properties", "prop_id");
+    expect(properties.find((row) => row.prop_id === "100030")?.coordinate_source).toBeNull();
+  });
+
   it("groups contractor name variants under one key", async () => {
     const contractors = await readTable("build-1", "contractors", "contractor_key");
 
@@ -322,12 +423,18 @@ describe("DuckDbLeadWarehouse", () => {
     );
 
     expect(coverage.properties).toMatchObject({
-      rows: 4,
-      with_coordinates: 2,
+      rows: 6,
+      with_coordinates: 6,
       with_year_built: 2,
       with_roof_age: 2,
       roof_age_confidence: { high: 1, medium: 1 },
-      owner_locality: { out_of_state: 1, local: 3 },
+      owner_locality: { out_of_state: 1, local: 5 },
+      coordinate_source: {
+        address_point: 1,
+        parcel_centroid: 2,
+        permit: 1,
+        shared_parcel_centroid: 2,
+      },
     });
     expect(coverage.roofing_permits).toMatchObject({
       rows: 3,
@@ -352,7 +459,7 @@ describe("DuckDbLeadWarehouse", () => {
   it("reports every row as added on the first build", () => {
     expect(result.tables).toEqual(
       expect.arrayContaining([
-        { table: "properties", rows: 4, added: 4, changed: 0, removed: 0 },
+        { table: "properties", rows: 6, added: 6, changed: 0, removed: 0 },
         { table: "roofing_permits", rows: 3, added: 3, changed: 0, removed: 0 },
       ]),
     );
@@ -376,7 +483,7 @@ describe("DuckDbLeadWarehouse", () => {
 
     expect(refetched.tables).toEqual(
       expect.arrayContaining([
-        { table: "permits", rows: 6, added: 0, changed: 0, removed: 0 },
+        { table: "permits", rows: 7, added: 0, changed: 0, removed: 0 },
         { table: "roofing_permits", rows: 3, added: 0, changed: 0, removed: 0 },
       ]),
     );

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { FetchedPage, SnapshotLayer } from "../application/ports.js";
-import { SourceId } from "../domain/source-id.js";
+import type { SourceId } from "../domain/source-id.js";
 import { SourceRequestError } from "./source-request-error.js";
+
+export enum FeatureGeometry {
+  Centroid = "centroid",
+  Point = "point",
+}
 
 const WGS84 = "4326";
 const FIRST_OBJECT_ID = "0";
@@ -21,7 +26,9 @@ interface ArcGisLayerInfo {
   error?: { code?: number };
 }
 
-export interface ArcGisParcelLayerConfig {
+export interface ArcGisFeatureLayerConfig {
+  id: SourceId;
+  geometry: FeatureGeometry;
   layerUrl: string;
   objectIdField: string;
   outFields: readonly string[];
@@ -31,10 +38,12 @@ export interface ArcGisParcelLayerConfig {
   now: () => Date;
 }
 
-export class ArcGisParcelLayer implements SnapshotLayer {
-  readonly id = SourceId.TcadParcels;
+export class ArcGisFeatureLayer implements SnapshotLayer {
+  readonly id: SourceId;
 
-  constructor(private readonly config: ArcGisParcelLayerConfig) {}
+  constructor(private readonly config: ArcGisFeatureLayerConfig) {
+    this.id = config.id;
+  }
 
   async version(): Promise<string> {
     const url = new URL(this.config.layerUrl);
@@ -50,8 +59,9 @@ export class ArcGisParcelLayer implements SnapshotLayer {
     const url = new URL(`${this.config.layerUrl}/query`);
     url.searchParams.set("where", `${objectIdField} > ${afterKey ?? FIRST_OBJECT_ID}`);
     url.searchParams.set("outFields", outFields.join(","));
-    url.searchParams.set("returnGeometry", "false");
-    url.searchParams.set("returnCentroid", "true");
+    const asCentroid = this.config.geometry === FeatureGeometry.Centroid;
+    url.searchParams.set("returnGeometry", String(!asCentroid));
+    if (asCentroid) url.searchParams.set("returnCentroid", "true");
     url.searchParams.set("outSR", WGS84);
     url.searchParams.set("orderByFields", objectIdField);
     url.searchParams.set("resultRecordCount", String(pageSize));

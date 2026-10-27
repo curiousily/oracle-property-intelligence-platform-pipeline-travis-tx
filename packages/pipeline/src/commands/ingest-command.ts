@@ -4,7 +4,7 @@ import { ingestSource } from "../application/ingest-source.js";
 import { ingestTcadExport } from "../application/ingest-tcad-export.js";
 import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { SourceId } from "../domain/source-id.js";
-import { ArcGisParcelLayer } from "../infrastructure/arcgis-parcel-layer.js";
+import { ArcGisFeatureLayer, FeatureGeometry } from "../infrastructure/arcgis-feature-layer.js";
 import { DuckDbFixedWidthTransformer } from "../infrastructure/duckdb-fixed-width-transformer.js";
 import { FileArtifactPaths } from "../infrastructure/file-artifact-paths.js";
 import { FileRawStore } from "../infrastructure/file-raw-store.js";
@@ -22,6 +22,21 @@ const TCAD_PARCELS_LAYER_URL =
   "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/EXTERNAL_tcad_parcel/FeatureServer/0";
 const TCAD_PARCELS_OBJECT_ID = "OBJECTID_1";
 const TCAD_PARCELS_FIELDS = [TCAD_PARCELS_OBJECT_ID, "PROP_ID", "PID_10", "SITUS", "Shape__Area"];
+const TRAVIS_ADDRESS_POINTS_LAYER_URL =
+  "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/LOCATION_address_points/FeatureServer/0";
+const TRAVIS_ADDRESS_POINTS_OBJECT_ID = "OBJECTID";
+const TRAVIS_ADDRESS_POINTS_FIELDS = [
+  TRAVIS_ADDRESS_POINTS_OBJECT_ID,
+  "ADDRESS",
+  "ADDRESS_FRACTION",
+  "PREFIX_DIRECTION",
+  "PREFIX_TYPE",
+  "STREET_NAME",
+  "STREET_TYPE",
+  "SUFFIX_DIRECTION",
+  "ADDRESS_SUFFIX",
+  "FULL_STREET_NAME",
+];
 const ARCGIS_PAGE_SIZE = 2_000;
 const SOCRATA_PAGE_SIZE = 50_000;
 
@@ -84,10 +99,31 @@ export async function runIngest(
     case SourceId.TcadParcels:
       return ingestSnapshot(
         {
-          layer: new ArcGisParcelLayer({
+          layer: new ArcGisFeatureLayer({
+            id: SourceId.TcadParcels,
+            geometry: FeatureGeometry.Centroid,
             layerUrl: TCAD_PARCELS_LAYER_URL,
             objectIdField: TCAD_PARCELS_OBJECT_ID,
             outFields: TCAD_PARCELS_FIELDS,
+            pageSize: ARCGIS_PAGE_SIZE,
+            userAgent: USER_AGENT,
+            fetch: resilientFetch,
+            now,
+          }),
+          rawStore: new FileRawStore(dataDir),
+          watermarks,
+        },
+        { runId },
+      );
+    case SourceId.TravisAddressPoints:
+      return ingestSnapshot(
+        {
+          layer: new ArcGisFeatureLayer({
+            id: SourceId.TravisAddressPoints,
+            geometry: FeatureGeometry.Point,
+            layerUrl: TRAVIS_ADDRESS_POINTS_LAYER_URL,
+            objectIdField: TRAVIS_ADDRESS_POINTS_OBJECT_ID,
+            outFields: TRAVIS_ADDRESS_POINTS_FIELDS,
             pageSize: ARCGIS_PAGE_SIZE,
             userAgent: USER_AGENT,
             fetch: resilientFetch,

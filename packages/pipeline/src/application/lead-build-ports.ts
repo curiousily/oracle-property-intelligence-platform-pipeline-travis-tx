@@ -7,6 +7,7 @@ export interface BuildInputs {
   permitPages: string;
   appraisalTablesDir: string;
   parcelPages: string;
+  addressPointPages?: string;
 }
 
 export interface PermitCandidate extends PermitFacts, PermitDates {

@@ -14,6 +14,7 @@ import type {
   PropertyRoofEvidence,
   TableSummary,
 } from "../application/lead-build-ports.js";
+import { CoordinateSource } from "../domain/coordinate-source.js";
 import {
   AGED_ROOF_YEARS,
   LONG_OPEN_PERMIT_YEARS,
@@ -24,6 +25,7 @@ import type { PermitState } from "../domain/permit-state.js";
 import { Confidence } from "../domain/roof-age.js";
 import { ROOF_AGE_EVIDENCE, ROOFING_WORK, type RoofWork } from "../domain/roof-work.js";
 import { SourceId } from "../domain/source-id.js";
+import { MAX_ADDRESS_POINT_SPREAD_DEGREES, STREET_TYPE_ALIASES } from "../domain/street-address.js";
 import {
   TCAD_MAIN_FLOOR_DETAIL,
   TCAD_REAL_PROPERTY_TYPES,
@@ -49,11 +51,6 @@ const CONFIDENCE_ORDER = [Confidence.High, Confidence.Medium, Confidence.Low]
   .join(" ");
 const WHOLE_RAW_PAGE_JSON_BUFFER_BYTES = 134_217_728;
 const WAREHOUSE_CONFIG = { memory_limit: "8GB", preserve_insertion_order: "false" };
-
-enum CoordinateSource {
-  Permit = "permit",
-  ParcelCentroid = "parcel_centroid",
-}
 
 enum ExportTable {
   Permits = "permits",
@@ -102,6 +99,9 @@ const PERMIT_COLUMNS = {
   link: "STRUCT(url VARCHAR)",
 };
 
+const TRAVIS_COUNTY_BOUNDS = { south: 29.9, north: 30.7, west: -98.3, east: -97.3 };
+const ADDRESS_POINT_FEATURES =
+  "STRUCT(attributes STRUCT(ADDRESS BIGINT, PREFIX_DIRECTION VARCHAR, STREET_NAME VARCHAR, STREET_TYPE VARCHAR), geometry STRUCT(x DOUBLE, y DOUBLE))[]";
 const PARCEL_FEATURES =
   "STRUCT(attributes STRUCT(PROP_ID BIGINT, PID_10 VARCHAR, Shape__Area DOUBLE), centroid STRUCT(x DOUBLE, y DOUBLE))[]";
 
@@ -119,7 +119,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     this.connection.closeSync();
   }
 
-  async load({ permitPages, appraisalTablesDir, parcelPages }: BuildInputs) {
+  async load({ permitPages, appraisalTablesDir, parcelPages, addressPointPages }: BuildInputs) {
     this.appraisalRunId = basename(appraisalTablesDir);
     const tcad = (table: TcadTable) => literal(join(appraisalTablesDir, `${table}.parquet`));
 
@@ -163,20 +163,23 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         SELECT * FROM read_parquet(${tcad(TcadTable.ImprovementAttributes)})
         WHERE imprv_attr_desc IN (${list([TCAD_ROOF_COVERING_ATTRIBUTE, TCAD_ROOF_STYLE_ATTRIBUTE])});
 
-      CREATE TABLE parcels AS
+      CREATE TABLE parcel_features AS
       WITH features AS (
         SELECT unnest(features) AS feature
         FROM read_json(${literal(parcelPages)}, columns = {'features': '${PARCEL_FEATURES}'})
       )
-      SELECT feature.attributes.PROP_ID AS prop_id,
-        feature.centroid.y AS latitude,
-        feature.centroid.x AS longitude
+      SELECT feature.attributes.PROP_ID AS prop_id, feature.attributes.PID_10 AS geo_id,
+        feature.attributes.Shape__Area AS area, feature.centroid.y AS latitude, feature.centroid.x AS longitude
       FROM features
-      WHERE feature.attributes.PROP_ID IS NOT NULL AND feature.centroid IS NOT NULL
-      QUALIFY row_number() OVER (
-        PARTITION BY feature.attributes.PROP_ID
-        ORDER BY feature.attributes.Shape__Area DESC NULLS LAST, feature.centroid.y, feature.centroid.x
-      ) = 1;
+      WHERE feature.centroid IS NOT NULL;
+
+      CREATE TABLE parcels AS
+        SELECT prop_id, latitude, longitude FROM parcel_features WHERE prop_id IS NOT NULL
+        QUALIFY row_number() OVER (PARTITION BY prop_id ORDER BY area DESC NULLS LAST, latitude, longitude) = 1;
+
+      CREATE TABLE parcels_by_geo AS
+        SELECT geo_id, latitude, longitude FROM parcel_features WHERE geo_id IS NOT NULL
+        QUALIFY row_number() OVER (PARTITION BY geo_id ORDER BY area DESC NULLS LAST, latitude, longitude) = 1;
 
       CREATE TABLE main_improvement AS
         SELECT prop_id, imprv_id FROM tcad_improvements
@@ -210,11 +213,76 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       FROM permits p LEFT JOIN geo_properties g USING (geo_id);
     `);
 
+    await this.loadCoordinates(addressPointPages);
+
     return {
       permits: await this.count("permits"),
       properties: await this.count("tcad_properties"),
       parcels: await this.count("parcels"),
+      addressPoints: await this.count("address_points"),
     };
+  }
+
+  private async loadCoordinates(addressPointPages: string | undefined): Promise<void> {
+    const aliases = Object.entries(STREET_TYPE_ALIASES)
+      .map(([variant, canonical]) => `(${literal(variant)}, ${literal(canonical)})`)
+      .join(", ");
+    const points = addressPointPages
+      ? `SELECT unnest(features) AS point FROM read_json(${literal(addressPointPages)}, columns = {'features': '${ADDRESS_POINT_FEATURES}'})`
+      : `SELECT CAST(NULL AS ${ADDRESS_POINT_FEATURES.slice(0, -2)}) AS point WHERE false`;
+    const { south, north, west, east } = TRAVIS_COUNTY_BOUNDS;
+    const spread = (latitude: string, longitude: string) =>
+      `max(${latitude}) - min(${latitude}) + max(${longitude}) - min(${longitude}) < ${MAX_ADDRESS_POINT_SPREAD_DEGREES}`;
+
+    await this.connection.run(`
+      CREATE TABLE street_type_aliases (variant VARCHAR, canonical VARCHAR);
+      INSERT INTO street_type_aliases VALUES ${aliases};
+
+      CREATE TABLE address_points AS
+      SELECT point.attributes.ADDRESS AS number, point.attributes.PREFIX_DIRECTION AS prefix,
+        point.attributes.STREET_NAME AS street, point.attributes.STREET_TYPE AS street_type,
+        point.geometry.y AS latitude, point.geometry.x AS longitude
+      FROM (${points})
+      WHERE point.attributes.ADDRESS IS NOT NULL AND point.attributes.STREET_NAME IS NOT NULL AND point.geometry IS NOT NULL;
+
+      CREATE TABLE address_point_keys AS
+      SELECT ${addressKey("CAST(a.number AS VARCHAR)", "a.prefix", "a.street", "a.street_type")} AS address_key,
+        avg(a.latitude) AS latitude, avg(a.longitude) AS longitude
+      FROM address_points a LEFT JOIN street_type_aliases alias ON alias.variant = upper(trim(a.street_type))
+      GROUP BY 1
+      HAVING ${spread("a.latitude", "a.longitude")};
+
+      CREATE TABLE property_address_keys AS
+      SELECT p.prop_id,
+        ${addressKey("p.situs_num", "p.situs_street_prefx", "p.situs_street", "p.situs_street_suffix")} AS address_key
+      FROM tcad_properties p LEFT JOIN street_type_aliases alias ON alias.variant = upper(trim(p.situs_street_suffix))
+      WHERE p.situs_num IS NOT NULL AND p.situs_street IS NOT NULL;
+
+      CREATE TABLE permit_coordinates AS
+      SELECT geo_id, avg(latitude) AS latitude, avg(longitude) AS longitude
+      FROM permits
+      WHERE geo_id IS NOT NULL
+        AND latitude BETWEEN ${south} AND ${north} AND longitude BETWEEN ${west} AND ${east}
+      GROUP BY 1
+      HAVING ${spread("latitude", "longitude")};
+
+      CREATE TABLE property_coordinates AS
+      SELECT p.prop_id,
+        coalesce(own.latitude, shared.latitude, point.latitude, permit.latitude) AS latitude,
+        coalesce(own.longitude, shared.longitude, point.longitude, permit.longitude) AS longitude,
+        CASE
+          WHEN own.latitude IS NOT NULL THEN ${literal(CoordinateSource.ParcelCentroid)}
+          WHEN shared.latitude IS NOT NULL THEN ${literal(CoordinateSource.SharedParcelCentroid)}
+          WHEN point.latitude IS NOT NULL THEN ${literal(CoordinateSource.AddressPoint)}
+          WHEN permit.latitude IS NOT NULL THEN ${literal(CoordinateSource.Permit)}
+        END AS coordinate_source
+      FROM tcad_properties p
+      LEFT JOIN parcels own USING (prop_id)
+      LEFT JOIN parcels_by_geo shared ON shared.geo_id = p.geo_id
+      LEFT JOIN property_address_keys keys USING (prop_id)
+      LEFT JOIN address_point_keys point ON point.address_key = keys.address_key
+      LEFT JOIN permit_coordinates permit ON permit.geo_id = p.geo_id;
+    `);
   }
 
   async permitCandidates(): Promise<PermitCandidate[]> {
@@ -364,12 +432,10 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         w.years_open, w.past_expiry,
         p.applied_date, p.issue_date, p.status_date, p.completed_date, p.expires_date,
         p.address, p.city, p.zip, p.geo_id, l.prop_id, l.link_status,
-        coalesce(p.latitude, parcel.latitude) AS latitude,
-        coalesce(p.longitude, parcel.longitude) AS longitude,
-        CASE
-          WHEN p.latitude IS NOT NULL THEN ${literal(CoordinateSource.Permit)}
-          WHEN parcel.latitude IS NOT NULL THEN ${literal(CoordinateSource.ParcelCentroid)}
-        END AS coordinate_source,
+        coalesce(p.latitude, located.latitude) AS latitude,
+        coalesce(p.longitude, located.longitude) AS longitude,
+        CASE WHEN p.latitude IS NOT NULL THEN ${literal(CoordinateSource.Permit)} ELSE located.coordinate_source END
+          AS coordinate_source,
         coalesce(p.contractor_company_name, p.contractor_full_name) AS contractor_name,
         p.contractor_phone, k.contractor_key, p.contractor_trade,
         p.project_id, p.master_permit_number, p.job_valuation, p.source_url,
@@ -377,7 +443,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       FROM permits p
       JOIN permit_roof_work w USING (permit_number)
       JOIN permit_links l USING (permit_number)
-      LEFT JOIN parcels parcel ON parcel.prop_id = l.prop_id
+      LEFT JOIN property_coordinates located ON located.prop_id = l.prop_id
       LEFT JOIN contractor_keys k
         ON k.name IS NOT DISTINCT FROM coalesce(p.contractor_company_name, p.contractor_full_name)
         AND k.phone IS NOT DISTINCT FROM p.contractor_phone
@@ -418,8 +484,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         coalesce(r.roofing_permits, 0) AS roofing_permits,
         coalesce(r.unfinished_roofing_permits, 0) AS unfinished_roofing_permits,
         r.max_years_open, r.last_roofing_permit_issued,
-        parcel.latitude, parcel.longitude,
-        CASE WHEN parcel.latitude IS NOT NULL THEN ${literal(CoordinateSource.ParcelCentroid)} END AS coordinate_source,
+        located.latitude, located.longitude, located.coordinate_source,
         ${literal(SourceId.TcadAppraisalExport)} AS source, ${literal(this.appraisalRunId)} AS source_run_id
       FROM tcad_properties p
       JOIN tcad_owners owners USING (prop_id)
@@ -428,7 +493,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       LEFT JOIN roof_attributes ra USING (prop_id)
       LEFT JOIN property_roof_age a USING (prop_id)
       LEFT JOIN roofing r USING (prop_id)
-      LEFT JOIN parcels parcel USING (prop_id);
+      LEFT JOIN property_coordinates located USING (prop_id);
 
       CREATE OR REPLACE VIEW export_contractors AS
       SELECT contractor_key,
@@ -475,6 +540,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         ...numbers(properties),
         roof_age_confidence: await this.histogram("export_properties", "roof_age_confidence"),
         owner_locality: await this.histogram("export_properties", "owner_locality"),
+        coordinate_source: await this.histogram("export_properties", "coordinate_source"),
       },
       roofing_permits: {
         ...numbers(roofing),
@@ -635,4 +701,9 @@ async function exists(path: string): Promise<boolean> {
 
 function numbers(row: Row | undefined): Record<string, number> {
   return Object.fromEntries(Object.entries(row ?? {}).map(([key, value]) => [key, Number(value)]));
+}
+
+function addressKey(number: string, prefix: string, street: string, streetType: string): string {
+  const part = (column: string) => `coalesce(nullif(upper(trim(${column})), ''), '')`;
+  return `concat_ws('|', ${part(number)}, ${part(prefix)}, ${part(street)}, coalesce(alias.canonical, ${part(streetType)}))`;
 }

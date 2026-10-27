@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { SourceId } from "../../src/domain/source-id.js";
-import { ArcGisParcelLayer } from "../../src/infrastructure/arcgis-parcel-layer.js";
+import {
+  ArcGisFeatureLayer,
+  FeatureGeometry,
+} from "../../src/infrastructure/arcgis-feature-layer.js";
 import { SourceRequestError } from "../../src/infrastructure/source-request-error.js";
 
 const LAYER_URL =
   "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/EXTERNAL_tcad_parcel/FeatureServer/0";
 
-function layerAnswering(body: unknown, status = 200) {
+function layerAnswering(body: unknown, status = 200, geometry = FeatureGeometry.Centroid) {
   const urls: URL[] = [];
-  const layer = new ArcGisParcelLayer({
+  const layer = new ArcGisFeatureLayer({
+    id: SourceId.TcadParcels,
+    geometry,
     layerUrl: LAYER_URL,
     objectIdField: "OBJECTID_1",
     outFields: ["OBJECTID_1", "PROP_ID", "PID_10"],
@@ -31,8 +36,8 @@ const twoParcels = {
   exceededTransferLimit: true,
 };
 
-describe("ArcGisParcelLayer", () => {
-  it("is the TCAD parcels source", () => {
+describe("ArcGisFeatureLayer", () => {
+  it("is the source it was configured as", () => {
     expect(layerAnswering({}).layer.id).toBe(SourceId.TcadParcels);
   });
 
@@ -60,6 +65,16 @@ describe("ArcGisParcelLayer", () => {
       resultRecordCount: "2",
       f: "json",
     });
+  });
+
+  it("asks for WGS84 point geometry for a point layer", async () => {
+    const { layer, urls } = layerAnswering(twoParcels, 200, FeatureGeometry.Point);
+
+    await layer.fetchPage(undefined);
+
+    expect(urls[0]?.searchParams.get("returnGeometry")).toBe("true");
+    expect(urls[0]?.searchParams.has("returnCentroid")).toBe(false);
+    expect(urls[0]?.searchParams.get("outSR")).toBe("4326");
   });
 
   it("starts from the first object on the first page", async () => {

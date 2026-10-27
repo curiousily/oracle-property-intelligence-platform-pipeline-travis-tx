@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [austin-permits, tcad-appraisal-export, tcad-parcels]
+        source: [austin-permits, tcad-appraisal-export, tcad-parcels, travis-address-points]
     env:
       SOURCE: ${{ matrix.source }}
     steps:
@@ -118,6 +118,8 @@ jobs:
           fetch raw/austin-permits
           fetch "tables/tcad-appraisal-export/$(latest_run tables/tcad-appraisal-export)"
           fetch "raw/tcad-parcels/$(latest_run raw/tcad-parcels)"
+          address_points="$(latest_run raw/travis-address-points)"
+          if [ -n "$address_points" ]; then fetch "raw/travis-address-points/$address_points"; fi
           previous="$(latest_run build)"
           if [ -n "$previous" ]; then fetch "build/$previous"; fi
 
