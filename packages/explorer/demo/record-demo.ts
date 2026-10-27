@@ -11,8 +11,8 @@ const NARRATION_CACHE_DIR = "demo/narration-cache";
 const VIDEO_FILE = "explorer-demo.mp4";
 const TERMINAL_URL = "https://terminal.demo/";
 const VIEWPORT = { width: 1440, height: 900 };
-const PAUSE_AFTER_LINE_MS = 900;
-const SETTLE_MS = 1_500;
+const PAUSE_AFTER_LINE_MS = 700;
+const SETTLE_MS = 1_100;
 const DATA_TIMEOUT_MS = 120_000;
 const AGENT_TIMEOUT_MS = 180_000;
 const TERMINAL_LINE_DELAY_MS = 250;
@@ -63,7 +63,7 @@ function linesFor(counts: Counts) {
     registry:
       "And here are the busiest roofing contractors with their Texas registry record: the legal name, the type of organization, whether it's active, and how each match was made.",
     manifest:
-      "The publication page lists every published file with its content ID, size and SHA-256 hash.",
+      "The publication page lists every published file with its content ID, size and SHA-256 hash, and how CI verified each one on public gateways when it published. That record is committed to git, too.",
     gateways:
       "Here, the coverage file is fetched by its content ID from two independent public gateways, and its size and hash match the manifest.",
     ipns: "The IPNS name resolves live to the newest manifest. Think of IPNS as the pointer, and the content ID as the snapshot itself.",
@@ -76,6 +76,9 @@ function linesFor(counts: Counts) {
       "If I add permits that expired without a final inspection, and keep only the ones that list a contractor, archived BBB grades start showing up.",
     permitDetail:
       "Each permit shows its status, how long it's been open, and the contractor's BBB grade, dated by the archived snapshot it came from.",
+    hail: "Next, roofs that took reported hail. Each of these properties had a NOAA hail report of an inch or more within two miles in the last three years, after its roof went on, linked to the NOAA record.",
+    topLeads:
+      "And top leads puts it all into one transparent score: points for roof age, for a permit left unfinished, and for recent hail, so the strongest leads come first.",
     agent:
       "The agent answers the same questions in plain English. A Workers AI model picks the query tools, the tools run right here in the browser, and every answer shows its evidence.",
     agentAnswer:
@@ -237,6 +240,20 @@ async function record() {
     .click();
   await page.waitForTimeout(SETTLE_MS);
   await narrate(page, lines.permitDetail);
+  await quickly(async () => {
+    await page.getByRole("tab", { name: "Hail on current roof" }).click();
+    await results
+      .locator("thead")
+      .getByText("max_hail_inches")
+      .waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
+  await show(results);
+  await narrate(page, lines.hail);
+  await quickly(async () => {
+    await page.getByRole("tab", { name: "Top leads" }).click();
+    await results.locator("thead").getByText("lead_score").waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
+  await narrate(page, lines.topLeads);
 
   await quickly(() => open(page, "agent"));
   await narrate(page, lines.agent);

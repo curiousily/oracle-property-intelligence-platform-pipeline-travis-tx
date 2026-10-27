@@ -31,6 +31,7 @@ const EXAMPLE_INPUTS: Record<string, object> = {
   find_top_leads: { place: "Rollingwood", radius_miles: 5, limit: 10 },
   property_details: { prop_id: 100036 },
   contractor_details: { name: "roof" },
+  owner_details: { prop_id: 100036 },
   find_long_held_properties: {
     place: "Lakeway",
     radius_miles: 3,

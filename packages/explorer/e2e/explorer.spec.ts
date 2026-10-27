@@ -70,7 +70,7 @@ test("runs SQL in DuckDB-WASM over the published Parquet tables", async ({ page 
 
   await page.getByRole("button", { name: "Run query" }).click();
 
-  await expect(page.locator(".data-table tbody tr")).toHaveCount(6);
+  await expect(page.locator(".data-table tbody tr")).toHaveCount(7);
   await expect(page.locator(".data-table")).toContainText("hail events");
 
   await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();

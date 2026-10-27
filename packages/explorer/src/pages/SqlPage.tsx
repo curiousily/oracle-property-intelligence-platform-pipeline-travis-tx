@@ -13,7 +13,8 @@ UNION ALL SELECT 'roofing_permits', count(*) FROM roofing_permits
 UNION ALL SELECT 'contractors', count(*) FROM contractors
 UNION ALL SELECT 'permits', count(*) FROM permits
 UNION ALL SELECT 'businesses', count(*) FROM businesses
-UNION ALL SELECT 'hail_events', count(*) FROM hail_events`,
+UNION ALL SELECT 'hail_events', count(*) FROM hail_events
+UNION ALL SELECT 'owners', count(*) FROM owners`,
   },
   {
     label: "Roof-age basis",
@@ -56,6 +57,14 @@ LIMIT 25`,
 FROM businesses
 WHERE naics_code = '238160'
 ORDER BY permit_issue_date
+LIMIT 25`,
+  },
+  {
+    label: "Owners with the most aged roofs",
+    sql: `SELECT owner_name, mailing_city, mailing_state, properties, aged_roofs,
+       unfinished_roofing_permits, total_market_value
+FROM owners
+ORDER BY aged_roofs DESC
 LIMIT 25`,
   },
   {

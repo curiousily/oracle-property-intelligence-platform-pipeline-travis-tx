@@ -1,4 +1,4 @@
-import { PLACES, type Row, runTool, type ToolResult } from "@travis-oracle/query-core";
+import { PLACES, type Row, runTool, type ToolResult, ZIP_CODES } from "@travis-oracle/query-core";
 import { useEffect, useMemo, useState } from "react";
 import { Badge, Card, Cid, DataTable, Disclosure, ErrorNote, Spinner } from "../components/ui.js";
 import type { Dataset } from "../data/dataset.js";
@@ -119,9 +119,10 @@ interface Center extends MapCenter {
   name?: string | undefined;
 }
 
+const CENTERS = [...PLACES, ...ZIP_CODES];
 const PLACE_OPTIONS = [...PLACES].sort((a, b) => a.name.localeCompare(b.name));
 const placeCenter = (name: string): Center => {
-  const place = PLACES.find((candidate) => candidate.name === name) ?? PLACES[0];
+  const place = CENTERS.find((candidate) => candidate.name === name) ?? PLACES[0];
   return { name: place?.name, latitude: place?.latitude ?? 0, longitude: place?.longitude ?? 0 };
 };
 
@@ -256,10 +257,10 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
         <Card title="Search area">
           <div className="controls">
             <label>
-              Center on a place
+              Center on a place or ZIP code
               <select
                 value={
-                  center.name && PLACES.some((place) => place.name === center.name)
+                  center.name && CENTERS.some((place) => place.name === center.name)
                     ? center.name
                     : ""
                 }
@@ -268,11 +269,20 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
                 <option value="" disabled>
                   {center.name ?? "Dropped pin"}
                 </option>
-                {PLACE_OPTIONS.map((place) => (
-                  <option key={place.geoid} value={place.name}>
-                    {place.name}
-                  </option>
-                ))}
+                <optgroup label="Places">
+                  {PLACE_OPTIONS.map((place) => (
+                    <option key={place.geoid} value={place.name}>
+                      {place.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="ZIP codes">
+                  {ZIP_CODES.map((zip) => (
+                    <option key={zip.geoid} value={zip.name}>
+                      {zip.name}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             </label>
             <button type="button" className="button secondary" onClick={locate} disabled={locating}>

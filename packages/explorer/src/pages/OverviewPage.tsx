@@ -62,6 +62,7 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
   const permits = coverage.permits ?? {};
   const businesses = coverage.businesses;
   const hail = coverage.hail_events;
+  const owners = coverage.owners;
   const hailYears = Object.keys((hail?.by_year ?? {}) as Record<string, number>).sort();
   const count = (group: Coverage[string], key: string) => Number(group[key] ?? 0);
   const registryDetail =
@@ -197,6 +198,15 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
                 detail={`Travis County locations with an active Texas sales tax permit; ${formatCount(count(businesses, "with_property"))} linked to a TCAD property, ${formatCount(count(businesses, "with_coordinates"))} located`}
                 source="tx-sales-tax-permits"
                 run={latestRun("tx-sales-tax-permits")}
+              />
+            )}
+            {owners && (
+              <KindRow
+                kind="Owner entity"
+                records={count(owners, "rows")}
+                detail={`owners reconciled by name and mailing address; ${formatCount(count(owners, "with_two_or_more_properties"))} hold two or more properties, the largest ${formatCount(count(owners, "largest_portfolio"))}`}
+                source="tcad-appraisal-export"
+                run={lastChange("tcad-appraisal-export")}
               />
             )}
             {hail && (
