@@ -30,9 +30,9 @@ const CAPTION_SCRIPT = `
 
 async function caption(page: Page, title: string, body: string, pauseMs = READ_MS) {
   await page.evaluate(
-    ([heading, text]) =>
+    ({ heading, text }) =>
       (window as unknown as { demoCaption(a: string, b: string): void }).demoCaption(heading, text),
-    [title, body],
+    { heading: title, text: body },
   );
   await page.waitForTimeout(pauseMs);
 }
