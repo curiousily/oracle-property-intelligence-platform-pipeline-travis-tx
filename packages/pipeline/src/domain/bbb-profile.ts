@@ -1,3 +1,5 @@
+import { companyKey } from "./company-name.js";
+
 export enum BbbRating {
   APlus = "A+",
   A = "A",
@@ -43,6 +45,8 @@ export interface BbbProfile {
 
 const PROFILE_PATH = "/profile/";
 const PROFILE_ID = /-(\d{4})-(\d+)\/?$/;
+const PROFILE_SLUG = /\/profile\/[^/]+\/([^/?]+)-\d{4}-\d+\/?$/;
+const SLUG_SEPARATOR = "-";
 const RATINGS = new Set<string>(Object.values(BbbRating));
 
 export function profileIdFromUrl(url: string): string | undefined {
@@ -71,4 +75,9 @@ export function latestCapturePerProfile(captures: readonly ArchiveCapture[]): Pr
 
 export function bbbRatingOf(value: string | undefined): BbbRating | undefined {
   return value !== undefined && RATINGS.has(value) ? (value as BbbRating) : undefined;
+}
+
+export function slugCompanyKey(url: string): string | undefined {
+  const slug = PROFILE_SLUG.exec(url)?.[1];
+  return slug ? companyKey(slug.replaceAll(SLUG_SEPARATOR, " ")) : undefined;
 }

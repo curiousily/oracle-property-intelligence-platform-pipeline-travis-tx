@@ -8,6 +8,7 @@ import { runIdAt } from "./domain/run-id.js";
 
 const DEFAULT_LOOKBACK_DAYS = 7;
 const DEFAULT_DATA_DIR = "data";
+const DEFAULT_BUDGET_MINUTES = 20;
 
 enum Command {
   Ingest = "ingest",
@@ -20,6 +21,8 @@ const USAGE = [
   "usage: cli ingest austin-permits [--since YYYY-MM-DD] [--lookback-days N] [--data-dir DIR] [--run-id ID]",
   "       cli ingest tcad-appraisal-export [--data-dir DIR] [--run-id ID]",
   "       cli ingest tcad-parcels [--data-dir DIR] [--run-id ID]",
+  "       cli ingest travis-address-points [--data-dir DIR] [--run-id ID]",
+  "       cli ingest bbb-archive [--budget-minutes N] [--data-dir DIR] [--run-id ID]",
   "       cli build [--as-of YYYY-MM-DD] [--data-dir DIR] [--run-id ID]",
   "       cli publish [--run-id BUILD_ID] [--dry-run] [--data-dir DIR]",
   "       cli verify --cid MANIFEST_CID",
@@ -37,6 +40,7 @@ async function main(argv: string[]): Promise<unknown> {
       "as-of": { type: "string" },
       "dry-run": { type: "boolean", default: false },
       cid: { type: "string" },
+      "budget-minutes": { type: "string", default: String(DEFAULT_BUDGET_MINUTES) },
     },
   });
 
@@ -52,6 +56,7 @@ async function main(argv: string[]): Promise<unknown> {
         runId,
         lookbackDays: Number(values["lookback-days"]),
         since: values.since,
+        budgetMinutes: Number(values["budget-minutes"]),
       });
     case Command.Build:
       return runBuild(dataDir, runId, values["as-of"] ?? isoDateOf(new Date().toISOString()));

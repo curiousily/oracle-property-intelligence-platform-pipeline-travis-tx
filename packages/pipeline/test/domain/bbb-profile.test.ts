@@ -5,6 +5,7 @@ import {
   bbbRatingOf,
   latestCapturePerProfile,
   profileIdFromUrl,
+  slugCompanyKey,
   snapshotTimeOf,
 } from "../../src/domain/bbb-profile.js";
 
@@ -90,5 +91,21 @@ describe("bbbRatingOf", () => {
   it("rejects anything that is not a BBB grade", () => {
     expect(bbbRatingOf("AAA")).toBeUndefined();
     expect(bbbRatingOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("slugCompanyKey", () => {
+  it("reads the business name a profile URL spells out, as a contractor key", () => {
+    expect(
+      slugCompanyKey(
+        "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/my-roof-pro-llc-0825-1000223239/",
+      ),
+    ).toBe("my roof pro");
+  });
+
+  it("has no key for a URL without a profile slug", () => {
+    expect(
+      slugCompanyKey("https://www.bbb.org/us/tx/austin/category/roofing-contractors"),
+    ).toBeUndefined();
   });
 });

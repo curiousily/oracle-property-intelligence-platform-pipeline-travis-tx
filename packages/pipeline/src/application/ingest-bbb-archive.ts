@@ -1,36 +1,43 @@
-import { latestCapturePerProfile } from "../domain/bbb-profile.js";
+import {
+  latestCapturePerProfile,
+  type ProfileCapture,
+  slugCompanyKey,
+} from "../domain/bbb-profile.js";
 import { SourceId } from "../domain/source-id.js";
-import { laterWatermark } from "../domain/watermark.js";
 import type {
   ArchivedProfileRecord,
+  ArchivedSnapshots,
   ArchiveIndex,
   BbbArchiveStore,
   ProfileParser,
   SnapshotFetcher,
 } from "./bbb-ports.js";
-import type { WatermarkStore } from "./ports.js";
 
 export interface BbbArchiveDependencies {
   index: ArchiveIndex;
   snapshots: SnapshotFetcher;
   parser: ProfileParser;
   store: BbbArchiveStore;
-  watermarks: WatermarkStore;
+  archived: ArchivedSnapshots;
+  now: () => Date;
 }
 
 export interface BbbArchiveOptions {
   runId: string;
   state: string;
   categories: readonly string[];
+  priorityKeys: ReadonlySet<string>;
+  budgetMs: number;
 }
 
 export interface BbbArchiveResult {
   source: SourceId;
   runId: string;
-  previousWatermark: string | undefined;
-  watermark: string | undefined;
   captures: number;
-  profiles: number;
+  pending: number;
+  prioritized: number;
+  fetched: number;
+  remaining: number;
   parsed: number;
   unparsed: number;
   failed: number;
@@ -38,21 +45,29 @@ export interface BbbArchiveResult {
 }
 
 export async function ingestBbbArchive(
-  { index, snapshots, parser, store, watermarks }: BbbArchiveDependencies,
-  { runId, state, categories }: BbbArchiveOptions,
+  { index, snapshots, parser, store, archived, now }: BbbArchiveDependencies,
+  { runId, state, categories, priorityKeys, budgetMs }: BbbArchiveOptions,
 ): Promise<BbbArchiveResult> {
-  const source = SourceId.BbbArchive;
-  const previousWatermark = await watermarks.read(source);
-  const captures = await index.captures({ state, categories, since: previousWatermark });
-  const fresh = latestCapturePerProfile(captures).filter(
-    (capture) => previousWatermark === undefined || capture.timestamp > previousWatermark,
+  const deadline = now().getTime() + budgetMs;
+  const captures = await index.captures({ state, categories, since: undefined });
+  const pending = latestCapturePerProfile(captures).filter(
+    (capture) => !archived.has(capture.profileId, capture.timestamp),
   );
+  const isPriority = (capture: ProfileCapture) =>
+    priorityKeys.has(slugCompanyKey(capture.originalUrl) ?? "");
+  const ordered = [
+    ...pending.filter(isPriority),
+    ...pending.filter((capture) => !isPriority(capture)),
+  ];
 
+  let fetched = 0;
   let parsed = 0;
   let unparsed = 0;
   let failed = 0;
   const ratings: Record<string, number> = {};
-  for (const capture of fresh) {
+  for (const capture of ordered) {
+    if (now().getTime() >= deadline) break;
+    fetched += 1;
     let record: ArchivedProfileRecord;
     try {
       const snapshot = await snapshots.fetch(capture);
@@ -75,21 +90,14 @@ export async function ingestBbbArchive(
     await store.append(runId, record);
   }
 
-  const watermark = captures.reduce<string | undefined>(
-    (latest, capture) => laterWatermark(latest, capture.timestamp),
-    previousWatermark,
-  );
-  if (watermark !== undefined && watermark !== previousWatermark) {
-    await watermarks.write(source, watermark);
-  }
-
   return {
-    source,
+    source: SourceId.BbbArchive,
     runId,
-    previousWatermark,
-    watermark,
     captures: captures.length,
-    profiles: fresh.length,
+    pending: pending.length,
+    prioritized: pending.filter(isPriority).length,
+    fetched,
+    remaining: pending.length - fetched,
     parsed,
     unparsed,
     failed,

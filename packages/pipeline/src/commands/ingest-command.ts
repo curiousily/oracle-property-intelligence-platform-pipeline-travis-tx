@@ -8,17 +8,22 @@ import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { SourceId } from "../domain/source-id.js";
 import { ArcGisFeatureLayer, FeatureGeometry } from "../infrastructure/arcgis-feature-layer.js";
 import { BbbStateParser } from "../infrastructure/bbb-state-parser.js";
+import { contractorKeysOf } from "../infrastructure/build-tables.js";
 import { DuckDbFixedWidthTransformer } from "../infrastructure/duckdb-fixed-width-transformer.js";
 import { FileArtifactPaths } from "../infrastructure/file-artifact-paths.js";
 import { FileRawStore } from "../infrastructure/file-raw-store.js";
 import { HttpFileDownloader } from "../infrastructure/http-file-downloader.js";
 import { JsonWatermarkStore } from "../infrastructure/json-watermark-store.js";
-import { NdjsonBbbArchiveStore } from "../infrastructure/ndjson-bbb-archive-store.js";
+import {
+  loadArchivedSnapshots,
+  NdjsonBbbArchiveStore,
+} from "../infrastructure/ndjson-bbb-archive-store.js";
+import { latestRunDir } from "../infrastructure/run-directories.js";
 import { SocrataPermitSource } from "../infrastructure/socrata-permit-source.js";
 import { TcadExportCatalogPage } from "../infrastructure/tcad-export-catalog-page.js";
 import { UnzipMemberExtractor } from "../infrastructure/unzip-member-extractor.js";
 import { WaybackCdxIndex, WaybackSnapshotFetcher } from "../infrastructure/wayback.js";
-import { resilientFetch, STATE_DIR, USER_AGENT, WORK_DIR } from "./settings.js";
+import { BUILD_DIR, resilientFetch, STATE_DIR, USER_AGENT, WORK_DIR } from "./settings.js";
 
 const AUSTIN_OPEN_DATA_URL = "https://data.austintexas.gov";
 const AUSTIN_PERMITS_DATASET_ID = "3syk-w9eu";
@@ -50,6 +55,7 @@ const BBB_CATEGORIES = [
   "siding-contractors",
 ];
 const WAYBACK_REQUEST_INTERVAL_MS = 1_000;
+const MILLISECONDS_PER_MINUTE = 60_000;
 const ARCGIS_PAGE_SIZE = 2_000;
 const SOCRATA_PAGE_SIZE = 50_000;
 
@@ -58,6 +64,7 @@ export interface IngestCommandOptions {
   runId: string;
   lookbackDays: number;
   since: string | undefined;
+  budgetMinutes: number;
 }
 
 export function isSourceId(value: string | undefined): value is SourceId {
@@ -66,7 +73,7 @@ export function isSourceId(value: string | undefined): value is SourceId {
 
 export async function runIngest(
   source: SourceId,
-  { dataDir, runId, lookbackDays, since }: IngestCommandOptions,
+  { dataDir, runId, lookbackDays, since, budgetMinutes }: IngestCommandOptions,
 ): Promise<unknown> {
   const watermarks = new JsonWatermarkStore(join(dataDir, STATE_DIR));
   const now = () => new Date();
@@ -160,9 +167,16 @@ export async function runIngest(
           }),
           parser: new BbbStateParser(),
           store: new NdjsonBbbArchiveStore(dataDir),
-          watermarks,
+          archived: await loadArchivedSnapshots(dataDir),
+          now,
         },
-        { runId, state: BBB_STATE, categories: BBB_CATEGORIES },
+        {
+          runId,
+          state: BBB_STATE,
+          categories: BBB_CATEGORIES,
+          priorityKeys: await contractorKeysOf(await latestRunDir(join(dataDir, BUILD_DIR))),
+          budgetMs: budgetMinutes * MILLISECONDS_PER_MINUTE,
+        },
       );
   }
 }

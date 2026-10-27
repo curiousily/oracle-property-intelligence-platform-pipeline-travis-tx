@@ -35,3 +35,7 @@ export interface ArchivedProfileRecord {
 export interface BbbArchiveStore {
   append(runId: string, record: ArchivedProfileRecord): Promise<void>;
 }
+
+export interface ArchivedSnapshots {
+  has(profileId: string, timestamp: string): boolean;
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   ArchivedProfileRecord,
+  ArchivedSnapshots,
   ArchiveIndex,
   BbbArchiveStore,
   CaptureQuery,
@@ -8,14 +9,21 @@ import type {
   SnapshotFetcher,
 } from "../../src/application/bbb-ports.js";
 import { ingestBbbArchive } from "../../src/application/ingest-bbb-archive.js";
-import type { WatermarkStore } from "../../src/application/ports.js";
-import { type ArchiveCapture, type BbbProfile, BbbRating } from "../../src/domain/bbb-profile.js";
+import {
+  type ArchiveCapture,
+  type BbbProfile,
+  BbbRating,
+  type ProfileCapture,
+} from "../../src/domain/bbb-profile.js";
 import { SourceId } from "../../src/domain/source-id.js";
 
 const RUN_ID = "20261028T090000Z";
-const ACME = "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/acme-roofing-0825-1";
-const BETA = "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/beta-roofing-0825-2";
-const GONE = "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/gone-roofing-0825-3";
+const profileUrl = (slug: string) =>
+  `https://www.bbb.org/us/tx/austin/profile/roofing-contractors/${slug}`;
+const ACME = profileUrl("acme-roofing-0825-1");
+const BETA = profileUrl("beta-roofing-0825-2");
+const GONE = profileUrl("gone-roofing-0825-3");
+const ZETA = profileUrl("zeta-builders-0825-4");
 
 const receipt = {
   url: "https://web.archive.org/web/x",
@@ -24,6 +32,7 @@ const receipt = {
   bytes: 10,
   sha256: "abc",
 };
+const SECOND_MS = 1_000;
 
 class FixedIndex implements ArchiveIndex {
   queries: CaptureQuery[] = [];
@@ -36,8 +45,10 @@ class FixedIndex implements ArchiveIndex {
 
 class FakeSnapshots implements SnapshotFetcher {
   fetched: ArchiveCapture[] = [];
+  constructor(private readonly clock: { ms: number }) {}
   async fetch(capture: ArchiveCapture) {
     this.fetched.push(capture);
+    this.clock.ms += SECOND_MS;
     if (capture.originalUrl === GONE) throw new Error("HTTP 404");
     return {
       body: capture.originalUrl === BETA ? "<html>no state</html>" : "<html>state</html>",
@@ -47,10 +58,7 @@ class FakeSnapshots implements SnapshotFetcher {
 }
 
 class StateParser implements ProfileParser {
-  parse(
-    html: string,
-    capture: { profileId: string; originalUrl: string; timestamp: string },
-  ): BbbProfile | undefined {
+  parse(html: string, capture: ProfileCapture): BbbProfile | undefined {
     if (!html.includes(">state<")) return undefined;
     return {
       profileId: capture.profileId,
@@ -79,38 +87,46 @@ class MemoryStore implements BbbArchiveStore {
   }
 }
 
-class MemoryWatermarks implements WatermarkStore {
-  constructor(readonly values = new Map<SourceId, string>()) {}
-  async read(source: SourceId) {
-    return this.values.get(source);
-  }
-  async write(source: SourceId, watermark: string) {
-    this.values.set(source, watermark);
+class KnownSnapshots implements ArchivedSnapshots {
+  constructor(private readonly known: string[] = []) {}
+  has(profileId: string, timestamp: string) {
+    return this.known.includes(`${profileId}@${timestamp}`);
   }
 }
 
-function setup(captures: ArchiveCapture[], watermarks = new MemoryWatermarks()) {
+function setup(captures: ArchiveCapture[], archived = new KnownSnapshots()) {
+  const clock = { ms: 0 };
   return {
-    index: new FixedIndex(captures),
-    snapshots: new FakeSnapshots(),
-    parser: new StateParser(),
-    store: new MemoryStore(),
-    watermarks,
+    clock,
+    deps: {
+      index: new FixedIndex(captures),
+      snapshots: new FakeSnapshots(clock),
+      parser: new StateParser(),
+      store: new MemoryStore(),
+      archived,
+      now: () => new Date(clock.ms),
+    },
   };
 }
 
-const options = { runId: RUN_ID, state: "tx", categories: ["roofing-contractors"] };
+const options = (budgetMs: number, priority: string[] = []) => ({
+  runId: RUN_ID,
+  state: "tx",
+  categories: ["roofing-contractors"],
+  priorityKeys: new Set(priority),
+  budgetMs,
+});
 
 describe("ingestBbbArchive", () => {
-  it("fetches only the newest capture of each profile and keeps every outcome with its receipt", async () => {
-    const deps = setup([
+  it("fetches the newest capture of each profile and keeps every outcome with its receipt", async () => {
+    const { deps } = setup([
       { originalUrl: ACME, timestamp: "20210101000000" },
       { originalUrl: ACME, timestamp: "20260710203309" },
       { originalUrl: BETA, timestamp: "20250101000000" },
       { originalUrl: GONE, timestamp: "20240101000000" },
     ]);
 
-    const result = await ingestBbbArchive(deps, options);
+    const result = await ingestBbbArchive(deps, options(60 * SECOND_MS));
 
     expect(deps.snapshots.fetched.map((capture) => capture.timestamp)).toEqual([
       "20260710203309",
@@ -129,10 +145,11 @@ describe("ingestBbbArchive", () => {
     expect(result).toEqual({
       source: SourceId.BbbArchive,
       runId: RUN_ID,
-      previousWatermark: undefined,
-      watermark: "20260710203309",
       captures: 4,
-      profiles: 3,
+      pending: 3,
+      prioritized: 0,
+      fetched: 3,
+      remaining: 0,
       parsed: 1,
       unparsed: 1,
       failed: 1,
@@ -140,22 +157,43 @@ describe("ingestBbbArchive", () => {
     });
   });
 
-  it("asks the archive only for captures since the last run and skips ones already seen", async () => {
-    const watermarks = new MemoryWatermarks(new Map([[SourceId.BbbArchive, "20260710203309"]]));
-    const deps = setup(
+  it("skips snapshots it already archived", async () => {
+    const { deps } = setup(
       [
         { originalUrl: ACME, timestamp: "20260710203309" },
         { originalUrl: BETA, timestamp: "20261001000000" },
       ],
-      watermarks,
+      new KnownSnapshots(["0825-1@20260710203309"]),
     );
 
-    const result = await ingestBbbArchive(deps, options);
+    const result = await ingestBbbArchive(deps, options(60 * SECOND_MS));
 
-    expect(deps.index.queries).toEqual([
-      { state: "tx", categories: ["roofing-contractors"], since: "20260710203309" },
-    ]);
     expect(deps.snapshots.fetched.map((capture) => capture.originalUrl)).toEqual([BETA]);
-    expect(result.watermark).toBe("20261001000000");
+    expect(result).toMatchObject({ pending: 1, fetched: 1 });
+  });
+
+  it("fetches profiles named like known contractors first", async () => {
+    const { deps } = setup([
+      { originalUrl: ACME, timestamp: "20260101000000" },
+      { originalUrl: ZETA, timestamp: "20260101000000" },
+    ]);
+
+    const result = await ingestBbbArchive(deps, options(60 * SECOND_MS, ["zeta builders"]));
+
+    expect(deps.snapshots.fetched.map((capture) => capture.originalUrl)).toEqual([ZETA, ACME]);
+    expect(result.prioritized).toBe(1);
+  });
+
+  it("stops at the time budget and reports what is left", async () => {
+    const { deps } = setup([
+      { originalUrl: ACME, timestamp: "20260101000000" },
+      { originalUrl: BETA, timestamp: "20260101000000" },
+      { originalUrl: ZETA, timestamp: "20260101000000" },
+    ]);
+
+    const result = await ingestBbbArchive(deps, options(2 * SECOND_MS));
+
+    expect(deps.snapshots.fetched).toHaveLength(2);
+    expect(result).toMatchObject({ pending: 3, fetched: 2, remaining: 1 });
   });
 });

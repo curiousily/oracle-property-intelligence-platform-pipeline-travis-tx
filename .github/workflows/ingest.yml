@@ -25,6 +25,7 @@ permissions:
 
 env:
   RAW_BUCKET: travis-oracle-raw
+  BBB_BUDGET_MINUTES: "20"
   DATA_DIR: ${{ github.workspace }}/data
 
 jobs:
@@ -58,6 +59,16 @@ jobs:
             aws s3 cp "s3://$RAW_BUCKET/$state" "$DATA_DIR/$state" --endpoint-url "$R2_ENDPOINT" --only-show-errors
           fi
 
+      - name: Restore archived BBB snapshots and the latest contractors to prioritize
+        if: matrix.source == 'bbb-archive'
+        run: |
+          aws s3 sync "s3://$RAW_BUCKET/raw/bbb-archive" "$DATA_DIR/raw/bbb-archive" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          build_id="$(aws s3 ls "s3://$RAW_BUCKET/build/" --endpoint-url "$R2_ENDPOINT" | awk '$1 == "PRE" { print $2 }' | tr -d '/' | sort | tail -1)"
+          if [ -n "$build_id" ]; then
+            aws s3 cp "s3://$RAW_BUCKET/build/${build_id}/contractors.parquet" "$DATA_DIR/build/${build_id}/contractors.parquet" \
+              --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          fi
+
       - name: Ingest
         env:
           SINCE: ${{ inputs.since }}
@@ -66,7 +77,7 @@ jobs:
           echo "RUN_ID=${run_id}" >> "$GITHUB_ENV"
           mkdir -p "$DATA_DIR/runs/${run_id}"
           npm run ingest -w @travis-oracle/pipeline --silent -- "$SOURCE" \
-            --data-dir "$DATA_DIR" --run-id "${run_id}" ${SINCE:+--since "$SINCE"} \
+            --data-dir "$DATA_DIR" --run-id "${run_id}" --budget-minutes "$BBB_BUDGET_MINUTES" ${SINCE:+--since "$SINCE"} \
             | tee "$DATA_DIR/runs/${run_id}/${SOURCE}.json"
 
       - name: Upload raw files and tables, then the run result, then the watermark
