@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { ingestSource } from "./application/ingest-source.js";
 import { type IngestWindow, WindowKind } from "./domain/ingest-window.js";
@@ -6,6 +7,7 @@ import { runIdAt } from "./domain/run-id.js";
 import { SourceId } from "./domain/source-id.js";
 import { FileRawStore } from "./infrastructure/file-raw-store.js";
 import { JsonWatermarkStore } from "./infrastructure/json-watermark-store.js";
+import { type RetryPolicy, retryingFetch } from "./infrastructure/retrying-fetch.js";
 import { SocrataPermitSource } from "./infrastructure/socrata-permit-source.js";
 
 const USER_AGENT =
@@ -13,6 +15,12 @@ const USER_AGENT =
 const AUSTIN_OPEN_DATA_URL = "https://data.austintexas.gov";
 const AUSTIN_PERMITS_DATASET_ID = "3syk-w9eu";
 const SOCRATA_PAGE_SIZE = 50_000;
+const RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 5,
+  baseDelayMs: 2_000,
+  maxDelayMs: 120_000,
+  attemptTimeoutMs: 300_000,
+};
 const DEFAULT_LOOKBACK_DAYS = 7;
 const DEFAULT_DATA_DIR = "data";
 const WATERMARKS_FILE = join("state", "watermarks.json");
@@ -48,7 +56,7 @@ async function main(argv: string[]): Promise<void> {
         datasetId: AUSTIN_PERMITS_DATASET_ID,
         pageSize: SOCRATA_PAGE_SIZE,
         userAgent: USER_AGENT,
-        fetch,
+        fetch: retryingFetch(fetch, RETRY_POLICY, (milliseconds) => delay(milliseconds)),
         now: () => new Date(),
       }),
       rawStore: new FileRawStore(dataDir),

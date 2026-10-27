@@ -1,0 +1,94 @@
+name: ingest
+
+on:
+  schedule:
+    # The city republishes the whole permits dataset daily at about 14:40–15:05 UTC.
+    - cron: "30 16 * * *"
+  workflow_dispatch:
+    inputs:
+      since:
+        description: Re-read permits with a business date on or after this day (YYYY-MM-DD). Empty uses the watermark.
+        required: false
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RAW_BUCKET: travis-oracle-raw
+  DATA_DIR: ${{ github.workspace }}/data
+  AWS_DEFAULT_REGION: auto
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+jobs:
+  austin-permits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      - name: Derive R2 credentials from the Cloudflare API token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          token_id="$(curl --silent --fail --max-time 30 \
+            --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/tokens/verify" | jq -r .result.id)"
+          secret="$(printf %s "${CLOUDFLARE_API_TOKEN}" | sha256sum | cut -d' ' -f1)"
+          echo "::add-mask::${token_id}"
+          echo "::add-mask::${secret}"
+          {
+            echo "AWS_ACCESS_KEY_ID=${token_id}"
+            echo "AWS_SECRET_ACCESS_KEY=${secret}"
+            echo "R2_ENDPOINT=https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore watermarks
+        run: |
+          mkdir -p "$DATA_DIR/state"
+          if aws s3 ls "s3://$RAW_BUCKET/state/watermarks.json" --endpoint-url "$R2_ENDPOINT" > /dev/null; then
+            aws s3 cp "s3://$RAW_BUCKET/state/watermarks.json" "$DATA_DIR/state/watermarks.json" \
+              --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          fi
+
+      - name: Ingest Austin permits
+        env:
+          SINCE: ${{ inputs.since }}
+        run: |
+          run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "RUN_ID=${run_id}" >> "$GITHUB_ENV"
+          mkdir -p "$DATA_DIR/runs/${run_id}"
+          npm run ingest -w @travis-oracle/pipeline --silent -- austin-permits \
+            --data-dir "$DATA_DIR" --run-id "${run_id}" ${SINCE:+--since "$SINCE"} \
+            | tee "$DATA_DIR/runs/${run_id}/austin-permits.json"
+
+      - name: Upload raw pages, then the run result, then the watermark
+        run: |
+          aws s3 sync "$DATA_DIR/raw" "s3://$RAW_BUCKET/raw" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          aws s3 sync "$DATA_DIR/runs" "s3://$RAW_BUCKET/runs" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          if [ -f "$DATA_DIR/state/watermarks.json" ]; then
+            aws s3 cp "$DATA_DIR/state/watermarks.json" "s3://$RAW_BUCKET/state/watermarks.json" \
+              --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          fi
+
+      - name: Summarize the run
+        run: |
+          {
+            echo "### Austin permits ingest \`${RUN_ID}\`"
+            echo
+            echo '```json'
+            cat "$DATA_DIR/runs/${RUN_ID}/austin-permits.json"
+            echo '```'
+            echo
+            echo "Raw pages: \`s3://$RAW_BUCKET/raw/austin-permits/${RUN_ID}/\` ($(du -sh "$DATA_DIR/raw/austin-permits/${RUN_ID}" | cut -f1) gzipped)"
+          } >> "$GITHUB_STEP_SUMMARY"

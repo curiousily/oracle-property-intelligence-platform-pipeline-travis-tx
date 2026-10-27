@@ -1,6 +1,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it } from "vitest";
 import { SourceId } from "../../src/domain/source-id.js";
 import { FileRawStore } from "../../src/infrastructure/file-raw-store.js";
@@ -21,7 +22,7 @@ beforeEach(async () => {
 });
 
 describe("FileRawStore", () => {
-  it("keeps each page byte for byte and appends its receipt to the run's receipt log", async () => {
+  it("keeps each page byte for byte, gzipped, and appends its receipt to the run's log", async () => {
     const store = new FileRawStore(dataDir);
 
     for (const pageNumber of [1, 2]) {
@@ -35,11 +36,13 @@ describe("FileRawStore", () => {
     }
 
     const runDir = join(dataDir, "raw", "austin-permits", "20261027T063000Z");
-    expect(await readFile(join(runDir, "page-00001.json"), "utf8")).toBe("[]");
+    expect(gunzipSync(await readFile(join(runDir, "page-00001.json.gz"))).toString("utf8")).toBe(
+      "[]",
+    );
     const receipts = (await readFile(join(runDir, "receipts.ndjson"), "utf8")).trim().split("\n");
     expect(receipts.map((line) => JSON.parse(line))).toEqual([
-      { pageNumber: 1, file: "page-00001.json", ...receipt },
-      { pageNumber: 2, file: "page-00002.json", ...receipt },
+      { pageNumber: 1, file: "page-00001.json.gz", ...receipt },
+      { pageNumber: 2, file: "page-00002.json.gz", ...receipt },
     ]);
   });
 });
