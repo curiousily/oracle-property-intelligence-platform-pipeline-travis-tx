@@ -9,9 +9,9 @@ const SCHEMAS = toolSchemas();
 const REPOSITORY_URL =
   "https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx";
 const EXAMPLE_INPUTS: Record<string, object> = {
-  find_aged_roofs: { place: "Pflugerville", radius_miles: 5, min_roof_age_years: 15, limit: 10 },
+  find_aged_roofs: { place: "Rollingwood", radius_miles: 5, min_roof_age_years: 15, limit: 10 },
   find_open_roofing_permits: {
-    place: "Pflugerville",
+    place: "Rollingwood",
     radius_miles: 5,
     min_years_open: 5,
     limit: 10,

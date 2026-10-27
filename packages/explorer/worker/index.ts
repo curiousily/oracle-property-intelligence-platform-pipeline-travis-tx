@@ -1,4 +1,6 @@
+import { ANALYST_PROMPT } from "./agent-prompt.js";
 import { AgentRoute, type ChatCompletion, type ChatModel } from "./agent-route.js";
+import { analystTools } from "./analyst-tools.js";
 import { IpfsRoute, type MirrorStore } from "./ipfs-route.js";
 import { PublicationIndex } from "./publications.js";
 
@@ -17,6 +19,7 @@ const PUBLICATIONS_REFRESH_MS = 60_000;
 const PUBLICATIONS_CACHE_CONTROL = "public, max-age=60";
 const APP = "explorer";
 const ISO_DATE_LENGTH = 10;
+const TOOLS = analystTools();
 
 enum Route {
   Publications = "/api/publications",
@@ -62,6 +65,8 @@ function agentOf(env: Env): AgentRoute {
     app: APP,
     dailyNeurons: Number(env.AGENT_DAILY_NEURONS),
     today: () => new Date().toISOString().slice(0, ISO_DATE_LENGTH),
+    systemPrompt: ANALYST_PROMPT,
+    tools: TOOLS,
   });
 }
 

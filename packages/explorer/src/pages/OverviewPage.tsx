@@ -106,9 +106,13 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
             detail={`${formatCount(count(roofing, "unfinished"))} never finished`}
           />
           <Stat
-            label="Open 5+ years"
+            label="Never finished 5+ years"
             value={formatCount(count(roofing, "open_5_years_or_more"))}
-            detail="roofing permits"
+            detail={
+              roofing.still_open_5_years_or_more === undefined
+                ? "open, or expired without a final inspection"
+                : `${formatCount(count(roofing, "still_open_5_years_or_more"))} still open, the rest expired without a final inspection`
+            }
           />
           <Stat
             label="Roofs older than 15 years"

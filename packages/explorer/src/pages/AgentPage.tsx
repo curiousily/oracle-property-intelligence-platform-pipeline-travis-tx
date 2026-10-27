@@ -16,7 +16,7 @@ import { formatCount } from "../format.js";
 import { datasetInfo } from "./dataset-info.js";
 
 const EXAMPLES = [
-  "Which properties in Travis County within five miles of Pflugerville have roofs older than 15 years?",
+  "Which properties in Travis County within five miles of Rollingwood have roofs older than 15 years?",
   "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?",
   "Which properties within 3 miles of Lakeway have not changed owners in more than 10 years?",
   "Show properties within 2 miles of Manor whose owners live out of state.",

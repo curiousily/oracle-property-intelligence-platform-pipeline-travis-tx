@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { ANALYST_PROMPT } from "../../worker/agent-prompt.js";
 import {
   AgentRoute,
   type ChatCompletionRequest,
   type ChatModel,
   type KeyValueStore,
 } from "../../worker/agent-route.js";
+import { analystTools } from "../../worker/analyst-tools.js";
 
 const MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
 const QUESTION =
@@ -42,7 +44,12 @@ const TOOL_CALL = {
   ],
 };
 
-function agent(model: ChatModel, store = memoryStore(), dailyNeurons = 4_000) {
+function agent(
+  model: ChatModel,
+  store = memoryStore(),
+  dailyNeurons = 4_000,
+  systemPrompt = ANALYST_PROMPT,
+) {
   return new AgentRoute({
     model,
     modelName: MODEL,
@@ -50,6 +57,8 @@ function agent(model: ChatModel, store = memoryStore(), dailyNeurons = 4_000) {
     app: "explorer",
     dailyNeurons,
     today: () => "2026-10-27",
+    systemPrompt,
+    tools: analystTools(),
   });
 }
 
@@ -93,6 +102,30 @@ describe("AgentRoute", () => {
 
     expect(requests).toHaveLength(1);
     expect(replay).toMatchObject({ message: { content: "Found 12." }, cached: true, neurons: 0 });
+  });
+
+  it("does not replay answers cached under a different prompt", async () => {
+    const { requests, model } = scriptedModel({ role: "assistant", content: "Found 12." });
+    const store = memoryStore();
+
+    await agent(model, store).handle(ask([{ role: "user", content: QUESTION }]));
+    await agent(model, store, 4_000, `${ANALYST_PROMPT} Be brief.`).handle(
+      ask([{ role: "user", content: QUESTION }]),
+    );
+
+    expect(requests).toHaveLength(2);
+  });
+
+  it("removes tool markup the model writes into its answer", async () => {
+    const { model } = scriptedModel({
+      role: "assistant",
+      content: '<search>aged roofs</search>**12 matches.** <tool_call>{"name":"x"}</tool_call>',
+    });
+
+    const response = await agent(model).handle(ask([{ role: "user", content: "x" }]));
+    const reply = (await response.json()) as { message: { content: string } };
+
+    expect(reply.message.content).toBe("**12 matches.**");
   });
 
   it("drops the model's thinking from the answer", async () => {

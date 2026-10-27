@@ -52,7 +52,7 @@ export function PublicationPage({ dataset }: { dataset: Dataset }) {
         subtitle={`Build ${manifest.build_id}, created ${formatDateTime(manifest.created_at)}. Every object is addressed by its CID; gateway links are derived from CIDs.`}
         actions={
           <button type="button" className="button" onClick={verifySmall}>
-            Verify all on two public gateways
+            Verify every file under 20 MB on two public gateways
           </button>
         }
       >

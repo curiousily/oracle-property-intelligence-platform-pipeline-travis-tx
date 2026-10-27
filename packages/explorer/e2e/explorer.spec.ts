@@ -75,7 +75,7 @@ test("runs the agent's tool loop in the browser and shows the evidence", async (
                 function: {
                   name: "find_aged_roofs",
                   arguments: JSON.stringify({
-                    place: "Pflugerville",
+                    place: "Rollingwood",
                     radius_miles: 5,
                     min_roof_age_years: 15,
                   }),
@@ -96,9 +96,9 @@ test("runs the agent's tool loop in the browser and shows the evidence", async (
   });
   await open(page, "agent");
 
-  await page.getByRole("button", { name: /Pflugerville have roofs older than 15 years/ }).click();
+  await page.getByRole("button", { name: /Rollingwood have roofs older than 15 years/ }).click();
 
-  await expect(page.locator(".evidence")).toContainText(/[\d,]+ matches around Pflugerville/);
+  await expect(page.locator(".evidence")).toContainText(/[\d,]+ matches around Rollingwood/);
   await expect(page.locator(".bubble.agent")).toContainText("Scripted answer");
   expect(calls).toBe(2);
   await page.screenshot({ path: `${SCREENSHOTS}/agent.png`, fullPage: true });

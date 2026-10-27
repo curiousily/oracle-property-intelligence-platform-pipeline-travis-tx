@@ -98,7 +98,9 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
   const [roofAge, setRoofAge] = useState(DEFAULT_ROOF_AGE);
   const [confidence, setConfidence] = useState<(typeof CONFIDENCE_LEVELS)[number]>("low");
   const [yearsOpen, setYearsOpen] = useState(DEFAULT_YEARS_OPEN);
-  const [includeExpired, setIncludeExpired] = useState(true);
+  const [includeExpired, setIncludeExpired] = useState(false);
+  const [includeAccessory, setIncludeAccessory] = useState(false);
+  const [withContractor, setWithContractor] = useState(false);
   const [issuedSince, setIssuedSince] = useState<number>();
   const [ownershipYears, setOwnershipYears] = useState(DEFAULT_OWNERSHIP_YEARS);
   const [result, setResult] = useState<ToolResult>();
@@ -123,6 +125,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
           ...near,
           min_years_open: yearsOpen,
           include_expired: includeExpired,
+          include_accessory: includeAccessory,
+          with_contractor: withContractor,
           ...(issuedSince && { issued_since_year: issuedSince }),
         };
       case LeadKind.LongHeld:
@@ -138,6 +142,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
     confidence,
     yearsOpen,
     includeExpired,
+    includeAccessory,
+    withContractor,
     issuedSince,
     ownershipYears,
   ]);
@@ -301,7 +307,23 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
                     checked={includeExpired}
                     onChange={(event) => setIncludeExpired(event.target.checked)}
                   />
-                  Include permits that expired without a final inspection
+                  Also permits that expired without a final inspection
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={withContractor}
+                    onChange={(event) => setWithContractor(event.target.checked)}
+                  />
+                  Only permits that list a contractor
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includeAccessory}
+                    onChange={(event) => setIncludeAccessory(event.target.checked)}
+                  />
+                  Include accessory work (patio covers, sheds)
                 </label>
                 <label>
                   Issued in or after (year, optional)
@@ -442,7 +464,7 @@ function PropertyDetail({
             .map(([key, value]) => (
               <div key={key}>
                 <dt>{key}</dt>
-                <dd>{formatValue(value)}</dd>
+                <dd>{formatValue(value, key)}</dd>
               </div>
             ))}
         </dl>

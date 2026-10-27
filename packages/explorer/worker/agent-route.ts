@@ -1,6 +1,4 @@
-import { toolSchemas } from "@travis-oracle/query-core";
 import { z } from "zod";
-import { ANALYST_PROMPT } from "./agent-prompt.js";
 
 export interface ToolCall {
   id: string;
@@ -44,6 +42,8 @@ export interface AgentRouteConfig {
   app: string;
   dailyNeurons: number;
   today: () => string;
+  systemPrompt: string;
+  tools: ToolDefinition[];
 }
 
 const MAX_MESSAGES = 40;
@@ -59,8 +59,9 @@ const NEURONS_WHEN_UNREPORTED = 25;
 const SECONDS_PER_DAY = 86_400;
 const CACHE_TTL_SECONDS = 7 * SECONDS_PER_DAY;
 const BUDGET_TTL_SECONDS = 2 * SECONDS_PER_DAY;
-const CACHE_KEY_VERSION = "agent:v1";
-const THINKING = /<think>[\s\S]*?<\/think>/g;
+const CACHE_KEY_VERSION = "agent:v2";
+const MARKUP_BLOCKS = /<(think|search|tool_call|function_call|tool_response)>[\s\S]*?<\/\1>/g;
+const STRAY_TAGS = /<\/?[a-z_]+>/g;
 
 const HttpStatus = {
   BadRequest: 400,
@@ -98,11 +99,6 @@ const conversation = z.object({
     .max(MAX_MESSAGES),
 });
 
-const TOOLS: ToolDefinition[] = toolSchemas().map(({ name, description, inputSchema }) => {
-  const { $schema: _dialect, ...parameters } = inputSchema;
-  return { type: "function", function: { name, description, parameters } };
-});
-
 export class AgentRoute {
   constructor(private readonly config: AgentRouteConfig) {}
 
@@ -117,7 +113,10 @@ export class AgentRoute {
     const { messages } = parsed.data;
     const { modelName, dailyNeurons, store } = this.config;
 
-    const cacheKey = `${CACHE_KEY_VERSION}:${await sha256(JSON.stringify({ modelName, messages }))}`;
+    const { systemPrompt, tools } = this.config;
+    const cacheKey = `${CACHE_KEY_VERSION}:${await sha256(
+      JSON.stringify({ modelName, systemPrompt, tools, messages }),
+    )}`;
     const used = await this.neuronsUsed();
     const cached = await store.get(cacheKey);
     if (cached) {
@@ -133,7 +132,7 @@ export class AgentRoute {
     if (used >= dailyNeurons) {
       return Response.json(
         {
-          error: `The explorer's daily Workers AI budget (${dailyNeurons} free neurons) is spent. It resets at 00:00 UTC; questions asked before still answer from the cache.`,
+          error: `The daily Workers AI budget of this app (${dailyNeurons} free neurons) is spent. It resets at 00:00 UTC; questions asked before still answer from the cache.`,
         },
         { status: HttpStatus.TooManyRequests },
       );
@@ -142,8 +141,8 @@ export class AgentRoute {
     let completion: ChatCompletion;
     try {
       completion = await this.config.model({
-        messages: [{ role: "system", content: ANALYST_PROMPT }, ...messages],
-        tools: TOOLS,
+        messages: [{ role: "system", content: this.config.systemPrompt }, ...messages],
+        tools: this.config.tools,
         temperature: TEMPERATURE,
         max_tokens: MAX_OUTPUT_TOKENS,
       });
@@ -156,7 +155,7 @@ export class AgentRoute {
 
     const reply = completion.choices[0]?.message;
     const message = {
-      content: (reply?.content ?? "").replace(THINKING, "").trim(),
+      content: (reply?.content ?? "").replace(MARKUP_BLOCKS, "").replace(STRAY_TAGS, "").trim(),
       tool_calls: reply?.tool_calls ?? [],
     };
     const neurons = completion.usage?.neurons ?? NEURONS_WHEN_UNREPORTED;

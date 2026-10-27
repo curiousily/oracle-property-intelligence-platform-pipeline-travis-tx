@@ -30,6 +30,7 @@ export interface ToolResult {
   rows: Row[];
   related?: Row[];
   totalMatches?: number;
+  summary?: Record<string, number>;
   center?: Center;
   sql: string;
   dataset: DatasetInfo;
@@ -59,12 +60,15 @@ const RELATED_ROWS = 10;
 const MATCHING_CONTRACTORS = 5;
 const DISTANCE_DECIMALS = 2;
 const TOTAL_MATCHES = "total_matches";
+const SUMMARY_PREFIX = "summary__";
 
 const CONFIDENCE_LEVELS = ["low", "medium", "high"] as const;
 const ROOF_WORK = ["replacement", "repair", "accessory", "needs_review"] as const;
 const NON_LOCAL_OWNERS = ["out_of_state", "regional", "foreign"] as const;
 const OWNER_LOCALITIES = ["local", ...NON_LOCAL_OWNERS, "unknown"] as const;
 const EXPIRED_STATE = "expired";
+const OPEN_STATE = "open";
+const ACCESSORY_WORK = "accessory";
 
 const near = {
   place: z
@@ -106,29 +110,49 @@ function centerOf({
   throw new ToolInputError("Give a place or latitude and longitude to search around.");
 }
 
+interface NearbyQuery {
+  table: string;
+  columns: string;
+  center: Center;
+  radiusMiles: number;
+  conditions: string[];
+  orderBy: string;
+  rows: number;
+  summary: Record<string, string>;
+}
+
 async function nearbyRows(
   context: ToolContext,
-  table: string,
-  columns: string,
-  center: Center,
-  radiusMiles: number,
-  conditions: string[],
-  orderBy: string,
-  rows: number,
+  { table, columns, center, radiusMiles, conditions, orderBy, rows, summary }: NearbyQuery,
 ): Promise<ToolOutput> {
+  const summaryColumns = Object.entries(summary).map(
+    ([name, condition]) =>
+      `count(CASE WHEN ${condition} THEN 1 END) OVER () AS ${SUMMARY_PREFIX}${name}`,
+  );
   const sql = `WITH nearby AS (
   SELECT *, ${distanceMiles(center)} AS distance_miles FROM ${table}
   WHERE ${withinBox(center, radiusMiles)}
 )
-SELECT ${columns}, round(distance_miles, ${DISTANCE_DECIMALS}) AS distance_miles, count(*) OVER () AS ${TOTAL_MATCHES}
+SELECT ${columns}, round(distance_miles, ${DISTANCE_DECIMALS}) AS distance_miles,
+  ${[`count(*) OVER () AS ${TOTAL_MATCHES}`, ...summaryColumns].join(",\n  ")}
 FROM nearby
 WHERE ${[`distance_miles <= ${radiusMiles}`, ...conditions].join("\n  AND ")}
 ORDER BY ${orderBy}
 LIMIT ${rows}`;
   const found = await context.sql.all(sql);
+  const first = found[0] ?? {};
   return {
-    rows: found.map(({ [TOTAL_MATCHES]: _total, ...row }) => row),
-    totalMatches: Number(found[0]?.[TOTAL_MATCHES] ?? 0),
+    rows: found.map((row) =>
+      Object.fromEntries(
+        Object.entries(row).filter(
+          ([column]) => column !== TOTAL_MATCHES && !column.startsWith(SUMMARY_PREFIX),
+        ),
+      ),
+    ),
+    totalMatches: Number(first[TOTAL_MATCHES] ?? 0),
+    summary: Object.fromEntries(
+      Object.keys(summary).map((name) => [name, Number(first[`${SUMMARY_PREFIX}${name}`] ?? 0)]),
+    ),
     center,
     sql,
   };
@@ -165,23 +189,30 @@ const findAgedRoofs = defineTool({
   run: (context, input) => {
     const center = centerOf(input);
     const allowed = CONFIDENCE_LEVELS.slice(CONFIDENCE_LEVELS.indexOf(input.min_confidence));
-    return nearbyRows(
-      context,
-      "properties",
-      PROPERTY_COLUMNS,
+    return nearbyRows(context, {
+      table: "properties",
+      columns: PROPERTY_COLUMNS,
       center,
-      input.radius_miles,
-      [`roof_age_years > ${input.min_roof_age_years}`, `roof_age_confidence IN (${list(allowed)})`],
-      `list_position([${list([...CONFIDENCE_LEVELS].reverse())}], roof_age_confidence), roof_age_years DESC, distance_miles, prop_id`,
-      input.limit,
-    );
+      radiusMiles: input.radius_miles,
+      conditions: [
+        `roof_age_years > ${input.min_roof_age_years}`,
+        `roof_age_confidence IN (${list(allowed)})`,
+      ],
+      orderBy: `list_position([${list([...CONFIDENCE_LEVELS].reverse())}], roof_age_confidence), roof_age_years DESC, distance_miles, prop_id`,
+      rows: input.limit,
+      summary: Object.fromEntries(
+        [...CONFIDENCE_LEVELS]
+          .reverse()
+          .map((level) => [`${level}_confidence`, `roof_age_confidence = ${literal(level)}`]),
+      ),
+    });
   },
 });
 
 const findOpenRoofingPermits = defineTool({
   name: "find_open_roofing_permits",
   description:
-    "Find roofing permits that were never finished (still open, or expired without a final inspection) within a radius, longest open first, with the contractor and its archived BBB grade.",
+    "Find roofing permits that are still open within a radius, longest open first, with the contractor and its archived BBB grade. Optionally also never-finished permits that expired without a final inspection. summary counts all matches.",
   input: z.object({
     ...near,
     min_years_open: z
@@ -191,8 +222,14 @@ const findOpenRoofingPermits = defineTool({
       .describe("Open at least this many years."),
     include_expired: z
       .boolean()
-      .default(true)
-      .describe("Include permits that expired without being finaled."),
+      .default(false)
+      .describe(
+        "Also include permits that expired without a final inspection (never finished, but no longer open).",
+      ),
+    include_accessory: z
+      .boolean()
+      .default(false)
+      .describe("Also include accessory roof work such as patio covers, carports and sheds."),
     roof_work: z.enum(ROOF_WORK).optional().describe("Only this kind of roof work."),
     issued_since_year: z
       .number()
@@ -201,23 +238,36 @@ const findOpenRoofingPermits = defineTool({
       .max(2100)
       .optional()
       .describe("Only permits issued in or after this year."),
+    with_contractor: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Only permits that list a contractor. Use it when the user asks who the contractor is; summary.with_contractor counts them among all matches.",
+      ),
     limit,
   }),
   run: (context, input) => {
     const conditions = ["unfinished", `years_open >= ${input.min_years_open}`];
+    if (input.with_contractor) conditions.push("contractor_name IS NOT NULL");
     if (!input.include_expired) conditions.push(`permit_state <> ${literal(EXPIRED_STATE)}`);
+    if (!input.include_accessory) conditions.push(`roof_work <> ${literal(ACCESSORY_WORK)}`);
     if (input.roof_work) conditions.push(`roof_work = ${literal(input.roof_work)}`);
     if (input.issued_since_year) conditions.push(`year(issue_date) >= ${input.issued_since_year}`);
-    return nearbyRows(
-      context,
-      "roofing_permits",
-      PERMIT_COLUMNS,
-      centerOf(input),
-      input.radius_miles,
+    return nearbyRows(context, {
+      table: "roofing_permits",
+      columns: PERMIT_COLUMNS,
+      center: centerOf(input),
+      radiusMiles: input.radius_miles,
       conditions,
-      "years_open DESC, distance_miles, permit_number",
-      input.limit,
-    );
+      orderBy: "years_open DESC, distance_miles, permit_number",
+      rows: input.limit,
+      summary: {
+        still_open: `permit_state = ${literal(OPEN_STATE)}`,
+        expired_without_final: `permit_state = ${literal(EXPIRED_STATE)}`,
+        with_contractor: "contractor_name IS NOT NULL",
+        with_bbb_rating: "bbb_rating IS NOT NULL",
+      },
+    });
   },
 });
 
@@ -283,16 +333,21 @@ const findLongHeldProperties = defineTool({
     limit,
   }),
   run: (context, input) =>
-    nearbyRows(
-      context,
-      "properties",
-      PROPERTY_COLUMNS,
-      centerOf(input),
-      input.radius_miles,
-      [`ownership_years > ${input.min_ownership_years}`],
-      "ownership_years DESC, distance_miles, prop_id",
-      input.limit,
-    ),
+    nearbyRows(context, {
+      table: "properties",
+      columns: PROPERTY_COLUMNS,
+      center: centerOf(input),
+      radiusMiles: input.radius_miles,
+      conditions: [`ownership_years > ${input.min_ownership_years}`],
+      orderBy: "ownership_years DESC, distance_miles, prop_id",
+      rows: input.limit,
+      summary: Object.fromEntries(
+        NON_LOCAL_OWNERS.map((locality) => [
+          `${locality}_owners`,
+          `owner_locality = ${literal(locality)}`,
+        ]),
+      ),
+    }),
 });
 
 const findOutOfAreaOwners = defineTool({
@@ -309,16 +364,18 @@ const findOutOfAreaOwners = defineTool({
     limit,
   }),
   run: (context, input) =>
-    nearbyRows(
-      context,
-      "properties",
-      PROPERTY_COLUMNS,
-      centerOf(input),
-      input.radius_miles,
-      [`owner_locality IN (${list(input.localities)})`],
-      "distance_miles, prop_id",
-      input.limit,
-    ),
+    nearbyRows(context, {
+      table: "properties",
+      columns: PROPERTY_COLUMNS,
+      center: centerOf(input),
+      radiusMiles: input.radius_miles,
+      conditions: [`owner_locality IN (${list(input.localities)})`],
+      orderBy: "distance_miles, prop_id",
+      rows: input.limit,
+      summary: Object.fromEntries(
+        input.localities.map((locality) => [locality, `owner_locality = ${literal(locality)}`]),
+      ),
+    }),
 });
 
 const locatePlace = defineTool({
