@@ -5,7 +5,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "ingest": "tsx src/cli.ts ingest"
+    "ingest": "tsx src/cli.ts ingest",
+    "build-leads": "tsx src/cli.ts build"
   },
   "dependencies": {
     "@duckdb/node-api": "^2.0.0-r.1"

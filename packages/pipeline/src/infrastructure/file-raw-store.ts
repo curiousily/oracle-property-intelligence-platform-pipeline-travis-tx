@@ -4,7 +4,8 @@ import { promisify } from "node:util";
 import { gzip } from "node:zlib";
 import type { RawPage, RawStore } from "../application/ports.js";
 
-const RAW_DIR = "raw";
+export const RAW_DIR = "raw";
+export const RAW_PAGE_GLOB = "page-*.json.gz";
 const RECEIPTS_FILE = "receipts.ndjson";
 const PAGE_NUMBER_WIDTH = 5;
 const GZIPPED_JSON_EXTENSION = ".json.gz";

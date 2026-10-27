@@ -10,6 +10,11 @@ export enum TcadTable {
   LandSegments = "land_segments",
 }
 
+export const TCAD_REAL_PROPERTY_TYPES: readonly string[] = ["R", "MH"];
+export const TCAD_MAIN_FLOOR_DETAIL = "1st Floor";
+export const TCAD_ROOF_COVERING_ATTRIBUTE = "Roof Covering";
+export const TCAD_ROOF_STYLE_ATTRIBUTE = "Roof Style";
+
 const TCAD_DATE_FORMAT = "%m-%d-%Y";
 const ACRES_IMPLIED_DECIMALS = 4;
 
