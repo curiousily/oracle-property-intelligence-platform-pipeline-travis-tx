@@ -1,6 +1,6 @@
 # Travis County Oracle: property intelligence pipeline
 
-A continuous, incremental pipeline that loads Travis County, TX property, permit, ownership, contractor, BBB and coordinate data into DuckDB-queryable Parquet tables. It publishes every snapshot to public IPFS as content-addressed artifacts and serves it to a browser UI, an agent and MCP clients. Oracle carries no infrastructure cost: everything runs on free plans.
+A continuous, incremental pipeline that loads Travis County, TX property and ownership data (TCAD), City of Austin permits, contractors, archived BBB grades and coordinates into DuckDB-queryable Parquet tables. It publishes every snapshot to public IPFS as content-addressed artifacts and serves it to a browser UI, an agent and MCP clients. Oracle carries no infrastructure cost: everything runs on free plans.
 
 The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 
@@ -16,7 +16,7 @@ The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 | MCP server | `npm ci && npm run --silent mcp` (see [MCP](#mcp)) |
 | Roofing CRM built on this dataset | https://roofing-crm.curiousily.workers.dev ([repository](https://github.com/curiousily/roofing-crm/tree/travis-crm)) |
 
-Open any CID on a public gateway this project does not operate:
+Open any CID on a public gateway this project does not operate. ipfs.orbitor.dev and gw.ipfs-lens.dev are run by neither this project nor its pinning vendors. The brief's examples, ipfs.io and dweb.link, no longer serve arbitrary content (they return 429 or were retired in 2026):
 
 ```bash
 curl -s https://ipfs.orbitor.dev/ipfs/bafkreifvwkazir7b4qmewtv5q6nsxkoxbq23f6usshshkbbmgfju3kdypm | jq '.objects[] | {name, cid, size, sha256}'
@@ -38,10 +38,10 @@ Publication `20261027T100024Z`:
 Coverage highlights, from the published `coverage.json`:
 - 445,201 properties located (98.1%).
 - 279,287 roofs older than 15 years.
-- 5,016 roofing permits never finished, 3,708 of them open 5+ years.
+- 5,016 roofing permits never finished. 3,708 of them have been unfinished for 5+ years: 21 are still open, and the rest expired without a final inspection. Searches return still-open permits by default; expired ones are opt-in.
 - 155,897 properties held more than 10 years.
 - 48,530 owners outside the Austin area.
-- 206 contractors with a BBB grade from 1,589 archived BBB profiles.
+- 206 contractors with a BBB grade, matched against 1,589 archived BBB profiles. The profiles are used for grading only and are not published as a table of their own.
 
 Every published snapshot also contains:
 - `build.json`: inputs, source row counts, per-table deltas.
@@ -91,8 +91,9 @@ flowchart LR
 
 - **Schedule.** Ingest and build run daily at 16:30 UTC, after the city republishes its permits. Publication runs weekly, Mondays at 17:45 UTC, and either can be dispatched by hand ([ingest.yml](.github/workflows/ingest.yml)).
 - **Idempotent and recorded.** Every source writes a watermark only after its raw pages and run record are stored. Every run writes a JSON record (timestamps, window, pages, records, watermark, receipts).
-- **Builds.** Each build reports per-table deltas (`added`, `changed`, `removed`), keyed by stable ids and compared on content without provenance columns. Identical inputs produce byte-identical Parquet, so unchanged tables keep their CIDs.
+- **Builds.** Each build reports per-table deltas (`added`, `changed`, `removed`), keyed by stable ids and compared on content without provenance columns. A row whose content did not change keeps the previous build's `source_run_id`, even when a newer run re-read it. Unchanged tables therefore come out byte-identical and keep their CIDs; consecutive builds on the full data hash identically.
 - **Publications.** A publication never mutates an earlier CID. Its manifest links the previous manifest and root (`previous`), IPNS moves to the new manifest, and all publications stay listed in the explorer and in Releases.
+- **Pin retention.** Filebase keeps the last 30 publications pinned and Pinata the last 3. Every publication's CAR stays on GitHub Releases, so anyone can import and re-pin an older snapshot by CID.
 
 ### Reconciliation and derived signals
 
@@ -117,13 +118,13 @@ flowchart LR
 | Tool | Answers |
 |---|---|
 | `find_aged_roofs` | Properties with roofs older than N years (default 15) within a radius of a place or point. Best-evidenced first. |
-| `find_open_roofing_permits` | Never-finished roofing permits open N+ years (default 5), with contractor and BBB grade, longest open first. |
+| `find_open_roofing_permits` | Roofing permits still open N+ years (default 5), longest open first, with contractor and BBB grade. Expired-without-final, accessory work and contractor-only are options. |
 | `find_long_held_properties` | Properties whose owner has held them more than N years (default 10). |
 | `find_out_of_area_owners` | Properties whose owner mails from outside the Austin area. |
 | `property_details`, `contractor_details` | One property with its roofing permits; one contractor with its BBB grade and permits. |
 | `locate_place`, `dataset_summary` | Census place coordinates; build id, CIDs and coverage of the dataset being queried. |
 
-Inputs are zod schemas exported as JSON Schema. Every result carries the SQL that produced it and the dataset CIDs.
+Inputs are zod schemas exported as JSON Schema. Every result carries the SQL that produced it, the dataset CIDs and, for radius searches, `summary` counts over all matches (for example how many list a contractor or a BBB grade).
 
 ### Agent
 
@@ -208,8 +209,23 @@ The CI secrets are `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `FILEBASE_AC
 | `packages/mcp` | Stdio MCP server |
 | `.github/workflows` | `ingest` (ingest, build, publish), `explorer` (test, deploy, end-to-end playthrough), `ci`, `source-access` |
 
+## Kit conformance and deviations
+
+The soofi-xyz team kit is enabled in this repository (`.claude/settings.json`), and its Elephant oracle skills are pinned (`skills-lock.json`).
+
+**Followed**, from the kit's county query-table pattern (`county-query-table-publish`, `deploy-open-data-mcp`):
+- one row per property in a Parquet query table on public IPFS via Filebase, behind an IPNS name
+- DuckDB range-reading that table straight from a gateway
+- an MCP server with a schema tool (`get_schema`) and read-only SQL next to the task tools
+
+**Not followed:**
+- **Hosting.** The kit's golden path is AWS (Amplify, CDK and tRPC for full-stack work; Bedrock and OpenSearch for agents). This project runs on Cloudflare's free plan instead, because the brief requires that Oracle carry no ongoing infrastructure cost.
+- **Publication path.** The kit's `oracle` agent publishes Lexicon data groups through elephant-cli and an Atlas county page. Those groups are not produced here. Publication is a self-describing UnixFS snapshot with its own manifest, CAR and IPNS pointer.
+- **Contractor identity.** The kit resolves contractors against an official corporate registry and licensing authority. Here they are reconciled from permit names and phones, plus archived BBB profiles.
+
 ## Known gaps
 
 - **Permits outside the City of Austin.** They are not in the dataset (see [Source limitations](#source-limitations-and-speed)).
 - **BBB coverage.** It grows about 770 archived profiles a day until the archive index is exhausted. Matching stays heuristic and carries a confidence.
+- **No hosted MCP endpoint.** The MCP server is stdio, run from a clone. A Worker on the free plan cannot run DuckDB, so the hosted surfaces are the explorer and its in-browser tool console.
 - **R2 retention.** Builds and raw pages are kept indefinitely; expiring old builds is the next step to stay inside the 10 GB free tier.

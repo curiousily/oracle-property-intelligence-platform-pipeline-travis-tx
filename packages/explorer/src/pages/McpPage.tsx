@@ -114,7 +114,7 @@ export function McpPage({ dataset, database }: { dataset: Dataset; database: Dat
               <>
                 <DataTable rows={result.rows} />
                 {result.related && result.related.length > 0 && <DataTable rows={result.related} />}
-                <Disclosure summary="Tool result as an MCP client receives it">
+                <Disclosure summary="Raw tool result (JSON)">
                   <pre className="code-block">{JSON.stringify(result, null, 2)}</pre>
                 </Disclosure>
               </>

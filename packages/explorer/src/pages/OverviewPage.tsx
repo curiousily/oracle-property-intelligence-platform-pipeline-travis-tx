@@ -176,7 +176,7 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
               run={latestRun("austin-permits")}
             />
             <KindRow
-              kind="Business"
+              kind="Business (BBB profile)"
               records={build.sourceRows.bbbProfiles ?? 0}
               detail="BBB business profiles with grade, accreditation and phone, as of the snapshot date"
               source="bbb-archive"
