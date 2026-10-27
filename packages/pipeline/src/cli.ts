@@ -23,6 +23,7 @@ const USAGE = [
   "       cli ingest tcad-parcels [--data-dir DIR] [--run-id ID]",
   "       cli ingest travis-address-points [--data-dir DIR] [--run-id ID]",
   "       cli ingest bbb-archive [--budget-minutes N] [--data-dir DIR] [--run-id ID]",
+  "       cli ingest tx-sales-tax-permits|tx-franchise-taxpayers|tdlr-licenses [--data-dir DIR] [--run-id ID]",
   "       cli build [--as-of YYYY-MM-DD] [--data-dir DIR] [--run-id ID]",
   "       cli publish [--run-id BUILD_ID] [--dry-run] [--data-dir DIR]",
   "       cli verify --cid MANIFEST_CID",

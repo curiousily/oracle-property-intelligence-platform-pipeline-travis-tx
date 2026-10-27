@@ -20,6 +20,7 @@ import {
 } from "../infrastructure/ndjson-bbb-archive-store.js";
 import { latestRunDir } from "../infrastructure/run-directories.js";
 import { SocrataPermitSource } from "../infrastructure/socrata-permit-source.js";
+import { SocrataSnapshotDataset } from "../infrastructure/socrata-snapshot-dataset.js";
 import { TcadExportCatalogPage } from "../infrastructure/tcad-export-catalog-page.js";
 import { UnzipMemberExtractor } from "../infrastructure/unzip-member-extractor.js";
 import { WaybackCdxIndex, WaybackSnapshotFetcher } from "../infrastructure/wayback.js";
@@ -54,6 +55,67 @@ const BBB_CATEGORIES = [
   "home-builders",
   "siding-contractors",
 ];
+const TEXAS_OPEN_DATA_URL = "https://data.texas.gov";
+const TEXAS_SNAPSHOTS = {
+  [SourceId.TxSalesTaxPermits]: {
+    datasetId: "jrea-zgmq",
+    columns: [
+      "taxpayer_number",
+      "taxpayer_name",
+      "taxpayer_organization_type",
+      "taxpayer_address",
+      "taxpayer_city",
+      "taxpayer_state",
+      "taxpayer_zip_code",
+      "outlet_number",
+      "outlet_name",
+      "outlet_address",
+      "outlet_city",
+      "outlet_state",
+      "outlet_zip_code",
+      "outlet_county_code",
+      "outlet_naics_code",
+      "outlet_inside_outside_city_limits_indicator",
+      "outlet_permit_issue_date",
+      "outlet_first_sales_date",
+    ],
+    where: "outlet_county_code = '227'",
+  },
+  [SourceId.TxFranchiseTaxpayers]: {
+    datasetId: "9cir-efmm",
+    columns: [
+      "taxpayer_number",
+      "taxpayer_name",
+      "taxpayer_organizational_type",
+      "taxpayer_city",
+      "taxpayer_state",
+      "taxpayer_zip",
+      "taxpayer_county_code",
+      "secretary_of_state_sos_or_coa_file_number",
+      "sos_charter_date",
+      "right_to_transact_business_code",
+    ],
+    where: undefined,
+  },
+  [SourceId.TdlrLicenses]: {
+    datasetId: "7358-krk7",
+    columns: [
+      "license_type",
+      "license_subtype",
+      "license_number",
+      "license_expiration_date_mmddccyy",
+      "business_name",
+      "owner_name",
+      "business_address_line1",
+      "business_city_state_zip",
+      "business_county",
+      "mailing_address_county",
+      "owner_telephone",
+      "business_telephone",
+    ],
+    where: "upper(business_county) = 'TRAVIS' OR upper(mailing_address_county) = 'TRAVIS'",
+  },
+};
 const WAYBACK_REQUEST_INTERVAL_MS = 1_000;
 const MILLISECONDS_PER_MINUTE = 60_000;
 const ARCGIS_PAGE_SIZE = 2_000;
@@ -145,6 +207,25 @@ export async function runIngest(
             objectIdField: TRAVIS_ADDRESS_POINTS_OBJECT_ID,
             outFields: TRAVIS_ADDRESS_POINTS_FIELDS,
             pageSize: ARCGIS_PAGE_SIZE,
+            userAgent: USER_AGENT,
+            fetch: resilientFetch,
+            now,
+          }),
+          rawStore: new FileRawStore(dataDir),
+          watermarks,
+        },
+        { runId },
+      );
+    case SourceId.TxSalesTaxPermits:
+    case SourceId.TxFranchiseTaxpayers:
+    case SourceId.TdlrLicenses:
+      return ingestSnapshot(
+        {
+          layer: new SocrataSnapshotDataset({
+            id: source,
+            baseUrl: TEXAS_OPEN_DATA_URL,
+            ...TEXAS_SNAPSHOTS[source],
+            pageSize: SOCRATA_PAGE_SIZE,
             userAgent: USER_AGENT,
             fetch: resilientFetch,
             now,

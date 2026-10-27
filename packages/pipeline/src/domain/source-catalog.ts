@@ -97,4 +97,54 @@ export const SOURCE_CATALOG: readonly SourceDescription[] = [
       "Contractor matching by name and phone is heuristic and carries a match confidence.",
     ],
   },
+  {
+    id: SourceId.TxSalesTaxPermits,
+    name: "Active Sales Tax Permit Holders (Travis County outlets)",
+    publisher: "Texas Comptroller of Public Accounts, Texas Open Data Portal (Socrata jrea-zgmq)",
+    url: "https://data.texas.gov/d/jrea-zgmq",
+    provides: [
+      "every business location in Travis County holding an active sales tax permit",
+      "business and taxpayer names, NAICS industry code, outlet address and permit dates",
+      "taxpayer numbers used to resolve contractors to registered businesses",
+    ],
+    refresh:
+      "Downloads a new snapshot of the Travis County outlets only when the dataset's rows were updated, 50,000 rows a page.",
+    limitations: [
+      "Only businesses that sell or rent taxable items hold a sales tax permit; many service businesses do not appear.",
+      "Outlets are linked to properties by normalized street address and ZIP code; suites and free-form addresses can stay unlinked.",
+    ],
+  },
+  {
+    id: SourceId.TxFranchiseTaxpayers,
+    name: "Active Franchise Taxpayers",
+    publisher: "Texas Comptroller of Public Accounts, Texas Open Data Portal (Socrata 9cir-efmm)",
+    url: "https://data.texas.gov/d/9cir-efmm",
+    provides: [
+      "every active Texas franchise taxpayer: corporations, LLCs and partnerships",
+      "Secretary of State file number, charter date and right to transact business",
+    ],
+    refresh:
+      "Downloads a new statewide snapshot of the identity columns only when the dataset's rows were updated, 50,000 rows a page.",
+    limitations: [
+      "Statewide and large (about 3.5 million rows), so only the identity columns are kept.",
+      "Sole proprietors are not franchise taxpayers; contractors are resolved by normalized name, and only unambiguous matches are kept.",
+    ],
+  },
+  {
+    id: SourceId.TdlrLicenses,
+    name: "TDLR All Licenses (Travis County)",
+    publisher:
+      "Texas Department of Licensing and Regulation, Texas Open Data Portal (Socrata 7358-krk7)",
+    url: "https://data.texas.gov/d/7358-krk7",
+    provides: [
+      "state licenses of businesses and people in Travis County (electrical, air conditioning, and more)",
+      "license number, type, expiration, business name and phones used to match contractors",
+    ],
+    refresh:
+      "Downloads a new snapshot of the Travis County licenses only when the dataset's rows were updated, 50,000 rows a page.",
+    limitations: [
+      "Texas does not license roofing contractors, so a TDLR match identifies a contractor's other licensed trades, not a roofing license.",
+      "Licenses are matched to contractors by phone first, then by an unambiguous normalized name.",
+    ],
+  },
 ];

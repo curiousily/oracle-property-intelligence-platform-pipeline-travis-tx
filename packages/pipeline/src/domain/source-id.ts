@@ -4,4 +4,7 @@ export enum SourceId {
   TcadParcels = "tcad-parcels",
   TravisAddressPoints = "travis-address-points",
   BbbArchive = "bbb-archive",
+  TxSalesTaxPermits = "tx-sales-tax-permits",
+  TxFranchiseTaxpayers = "tx-franchise-taxpayers",
+  TdlrLicenses = "tdlr-licenses",
 }

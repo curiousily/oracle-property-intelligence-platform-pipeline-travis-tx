@@ -15,6 +15,9 @@ on:
         description: Publish the new build to IPFS (Filebase + Pinata), point IPNS at it and attach the CAR to a release.
         type: boolean
         default: false
+      sources:
+        description: JSON list of sources to ingest. Empty ingests every source.
+        required: false
 
 concurrency:
   group: ingest
@@ -36,8 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source:
-          [austin-permits, tcad-appraisal-export, tcad-parcels, travis-address-points, bbb-archive]
+        source: ${{ fromJSON(inputs.sources || '["austin-permits", "tcad-appraisal-export", "tcad-parcels", "travis-address-points", "bbb-archive", "tx-sales-tax-permits", "tx-franchise-taxpayers", "tdlr-licenses"]') }}
     env:
       SOURCE: ${{ matrix.source }}
     steps:
@@ -132,8 +134,10 @@ jobs:
           fetch raw/bbb-archive
           fetch "tables/tcad-appraisal-export/$(latest_run tables/tcad-appraisal-export)"
           fetch "raw/tcad-parcels/$(latest_run raw/tcad-parcels)"
-          address_points="$(latest_run raw/travis-address-points)"
-          if [ -n "$address_points" ]; then fetch "raw/travis-address-points/$address_points"; fi
+          for snapshot in travis-address-points tx-sales-tax-permits tx-franchise-taxpayers tdlr-licenses; do
+            run="$(latest_run "raw/$snapshot")"
+            if [ -n "$run" ]; then fetch "raw/$snapshot/$run"; fi
+          done
           fetch runs
           aws s3 sync "s3://$RAW_BUCKET/build" "$DATA_DIR/build" --endpoint-url "$R2_ENDPOINT" --only-show-errors \
             --exclude "*" --include "*/build.json"
