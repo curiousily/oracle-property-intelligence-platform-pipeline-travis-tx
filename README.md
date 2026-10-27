@@ -14,7 +14,8 @@ The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 | IPNS name (pointer to the latest manifest) | `k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c` |
 | CARs and manifests of every publication | [GitHub Releases](https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx/releases) |
 | MCP server | `npm ci && npm run --silent mcp` (see [MCP](#mcp)) |
-| Roofing CRM built on this dataset | https://roofing-crm.curiousily.workers.dev ([repository](https://github.com/curiousily/roofing-crm/tree/travis-crm)) |
+| Narrated demo of the pipeline, explorer, agent and MCP (5:45) | https://www.youtube.com/watch?v=Qv6aPEK-MOo |
+| Roofing CRM built on this dataset | https://roofing-crm.curiousily.workers.dev ([repository](https://github.com/curiousily/roofing-crm/tree/travis-crm), [demo](https://www.youtube.com/watch?v=VQP6PSUhu00)) |
 
 Open any CID on a public gateway this project does not operate. ipfs.orbitor.dev and gw.ipfs-lens.dev are run by neither this project nor its pinning vendors. The brief's examples, ipfs.io and dweb.link, no longer serve arbitrary content (they return 429 or were retired in 2026):
 
