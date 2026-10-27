@@ -143,7 +143,7 @@ const PERMIT_COLUMNS = `permit_number, address, permit_state, roof_work, open_si
 const findAgedRoofs = defineTool({
   name: "find_aged_roofs",
   description:
-    "Find properties whose estimated roof age is above a threshold within a radius. Each row gives the roof-age basis (completed reroof permit, new-construction completion or year built) and its confidence.",
+    "Find properties whose estimated roof age is above a threshold within a radius, best-evidenced first (completed reroof permit, then new-construction completion, then year built), oldest first within each. Each row gives the roof-age basis and its confidence.",
   input: z.object({
     ...near,
     min_roof_age_years: z
@@ -169,7 +169,7 @@ const findAgedRoofs = defineTool({
       center,
       input.radius_miles,
       [`roof_age_years > ${input.min_roof_age_years}`, `roof_age_confidence IN (${list(allowed)})`],
-      "roof_age_years DESC, distance_miles, prop_id",
+      `list_position([${list([...CONFIDENCE_LEVELS].reverse())}], roof_age_confidence), roof_age_years DESC, distance_miles, prop_id`,
       input.limit,
     );
   },

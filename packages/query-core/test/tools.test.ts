@@ -78,6 +78,16 @@ describe("find_aged_roofs", () => {
     expect(result.sql).toContain("FROM properties");
   });
 
+  it("ranks the best-evidenced roof ages first, then the oldest", async () => {
+    const result = await run("find_aged_roofs", {
+      ...CENTER,
+      radius_miles: 10,
+      min_roof_age_years: 15,
+    });
+
+    expect(ids(result.rows, "prop_id")).toEqual(["1", "3", "4"]);
+  });
+
   it("can require a minimum confidence in the roof age", async () => {
     const result = await run("find_aged_roofs", { ...CENTER, min_confidence: "medium" });
 
