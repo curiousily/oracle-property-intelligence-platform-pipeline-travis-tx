@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { IngestStatus, ingestTcadExport } from "../../src/application/ingest-tcad-export.js";
+import { IngestStatus } from "../../src/application/ingest-status.js";
+import { ingestTcadExport } from "../../src/application/ingest-tcad-export.js";
 import type {
   ArtifactPaths,
   ExportCatalog,

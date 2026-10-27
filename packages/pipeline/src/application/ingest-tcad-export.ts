@@ -3,6 +3,7 @@ import { SourceId } from "../domain/source-id.js";
 import { exportFileName, exportKey, type TcadExportFile } from "../domain/tcad-export-catalog.js";
 import { TCAD_EXPORT_LAYOUT_VERSION, TCAD_EXPORT_TABLES } from "../domain/tcad-export-layout.js";
 import { laterWatermark } from "../domain/watermark.js";
+import { IngestStatus } from "./ingest-status.js";
 import type {
   ArtifactPaths,
   ExportCatalog,
@@ -10,11 +11,6 @@ import type {
   TableTransformer,
   WatermarkStore,
 } from "./ports.js";
-
-export enum IngestStatus {
-  Ingested = "ingested",
-  Unchanged = "unchanged",
-}
 
 export interface TcadExportDependencies {
   catalog: ExportCatalog;

@@ -18,6 +18,12 @@ export interface PagedSource {
   fetchPage(window: IngestWindow, afterKey: string | undefined): Promise<FetchedPage>;
 }
 
+export interface SnapshotLayer {
+  readonly id: SourceId;
+  version(): Promise<string>;
+  fetchPage(afterKey: string | undefined): Promise<FetchedPage>;
+}
+
 export interface RawPage {
   runId: string;
   source: SourceId;

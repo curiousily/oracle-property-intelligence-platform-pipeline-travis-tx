@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [austin-permits, tcad-appraisal-export]
+        source: [austin-permits, tcad-appraisal-export, tcad-parcels]
     env:
       SOURCE: ${{ matrix.source }}
     steps:
