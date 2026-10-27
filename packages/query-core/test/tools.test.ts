@@ -2,6 +2,7 @@ import { DuckDBInstance } from "@duckdb/node-api";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   type DatasetInfo,
+  matchDensity,
   runTool,
   type SqlRunner,
   TOOLS,
@@ -238,5 +239,29 @@ describe("catalog", () => {
       ToolInputError,
     );
     await expect(run("no_such_tool", {})).rejects.toThrow(/unknown tool/i);
+  });
+});
+
+describe("matchDensity", () => {
+  it("counts every match per map cell so a map can show all of them", async () => {
+    const cells = await matchDensity(
+      "find_aged_roofs",
+      { ...CENTER, radius_miles: 10, min_roof_age_years: 15 },
+      { sql: runner, dataset: DATASET },
+      0.01,
+    );
+
+    expect(cells.reduce((total, cell) => total + cell.matches, 0)).toBe(3);
+    expect(cells[0]).toEqual({
+      latitude: expect.any(Number),
+      longitude: expect.any(Number),
+      matches: 1,
+    });
+  });
+
+  it("only maps radius searches", async () => {
+    await expect(
+      matchDensity("property_details", { prop_id: 1 }, { sql: runner, dataset: DATASET }, 0.01),
+    ).rejects.toThrow(ToolInputError);
   });
 });

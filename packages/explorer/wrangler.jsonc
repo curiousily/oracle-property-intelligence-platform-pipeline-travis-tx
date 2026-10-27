@@ -12,6 +12,9 @@
     { "binding": "AGENT_STORE", "id": "944c2e5f45ce42309c8a8b748800fd0f", "remote": true }
   ],
   "ai": { "binding": "AI" },
+  "ratelimits": [
+    { "name": "AGENT_LIMITER", "namespace_id": "1003", "simple": { "limit": 20, "period": 60 } }
+  ],
   "observability": { "enabled": true },
   "vars": {
     "AGENT_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",

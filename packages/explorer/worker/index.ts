@@ -3,6 +3,7 @@ import { AgentRoute, type ChatCompletion, type ChatModel } from "./agent-route.j
 import { analystTools } from "./analyst-tools.js";
 import { IpfsRoute, type MirrorStore } from "./ipfs-route.js";
 import { PublicationIndex } from "./publications.js";
+import { tooManyRequests } from "./rate-limit.js";
 
 interface Env {
   ASSETS: Fetcher;
@@ -12,6 +13,7 @@ interface Env {
   AGENT_MODEL: string;
   AGENT_DAILY_NEURONS: string;
   IPFS_GATEWAYS: string;
+  AGENT_LIMITER: RateLimit;
 }
 
 const PUBLICATIONS_KEY = "publications.json";
@@ -20,6 +22,8 @@ const PUBLICATIONS_CACHE_CONTROL = "public, max-age=60";
 const APP = "explorer";
 const ISO_DATE_LENGTH = 10;
 const TOOLS = analystTools();
+const TOO_MANY_QUESTIONS =
+  "Too many questions in the last minute from this address. Wait a moment and ask again.";
 
 enum Route {
   Publications = "/api/publications",
@@ -80,7 +84,12 @@ export default {
       });
     }
     if (pathname === Route.AgentBudget) return agentOf(env).budget();
-    if (pathname === Route.Agent && request.method === "POST") return agentOf(env).handle(request);
+    if (pathname === Route.Agent && request.method === "POST") {
+      return (
+        (await tooManyRequests(env.AGENT_LIMITER, request, TOO_MANY_QUESTIONS)) ??
+        agentOf(env).handle(request)
+      );
+    }
     if (pathname.startsWith(Route.Ipfs)) {
       return new IpfsRoute({
         mirror: mirrorOf(env.MIRROR),

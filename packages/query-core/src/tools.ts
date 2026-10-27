@@ -43,10 +43,31 @@ interface QueryTool<Schema extends z.ZodType = z.ZodType> {
   description: string;
   input: Schema;
   run(context: ToolContext, input: z.infer<Schema>): Promise<ToolOutput>;
+  nearby?(input: z.infer<Schema>): NearbyQuery;
+}
+
+interface NearbyTool<Schema extends z.ZodType> {
+  name: string;
+  description: string;
+  input: Schema;
+  nearby(input: z.infer<Schema>): NearbyQuery;
+}
+
+export interface DensityCell {
+  latitude: number;
+  longitude: number;
+  matches: number;
 }
 
 function defineTool<Schema extends z.ZodType>(tool: QueryTool<Schema>): QueryTool {
   return tool;
+}
+
+function defineNearbyTool<Schema extends z.ZodType>(tool: NearbyTool<Schema>): QueryTool {
+  return defineTool<Schema>({
+    ...tool,
+    run: (context, input) => nearbyRows(context, tool.nearby(input)),
+  });
 }
 
 const DEFAULT_RADIUS_MILES = 5;
@@ -167,7 +188,7 @@ const PERMIT_COLUMNS = `permit_number, address, permit_state, roof_work, open_si
   issue_date, description, contractor_name, contractor_phone, bbb_rating, bbb_profile_url,
   bbb_snapshot_date, bbb_match_confidence, prop_id, latitude, longitude, source_url, source, source_run_id`;
 
-const findAgedRoofs = defineTool({
+const findAgedRoofs = defineNearbyTool({
   name: "find_aged_roofs",
   description:
     "Find properties whose estimated roof age is above a threshold within a radius, best-evidenced first (completed reroof permit, then new-construction completion, then year built), oldest first within each. Each row gives the roof-age basis and its confidence.",
@@ -186,10 +207,10 @@ const findAgedRoofs = defineTool({
       ),
     limit,
   }),
-  run: (context, input) => {
+  nearby: (input) => {
     const center = centerOf(input);
     const allowed = CONFIDENCE_LEVELS.slice(CONFIDENCE_LEVELS.indexOf(input.min_confidence));
-    return nearbyRows(context, {
+    return {
       table: "properties",
       columns: PROPERTY_COLUMNS,
       center,
@@ -205,11 +226,11 @@ const findAgedRoofs = defineTool({
           .reverse()
           .map((level) => [`${level}_confidence`, `roof_age_confidence = ${literal(level)}`]),
       ),
-    });
+    };
   },
 });
 
-const findOpenRoofingPermits = defineTool({
+const findOpenRoofingPermits = defineNearbyTool({
   name: "find_open_roofing_permits",
   description:
     "Find roofing permits that are still open within a radius, longest open first, with the contractor and its archived BBB grade. Optionally also never-finished permits that expired without a final inspection. summary counts all matches.",
@@ -246,14 +267,14 @@ const findOpenRoofingPermits = defineTool({
       ),
     limit,
   }),
-  run: (context, input) => {
+  nearby: (input) => {
     const conditions = ["unfinished", `years_open >= ${input.min_years_open}`];
     if (input.with_contractor) conditions.push("contractor_name IS NOT NULL");
     if (!input.include_expired) conditions.push(`permit_state <> ${literal(EXPIRED_STATE)}`);
     if (!input.include_accessory) conditions.push(`roof_work <> ${literal(ACCESSORY_WORK)}`);
     if (input.roof_work) conditions.push(`roof_work = ${literal(input.roof_work)}`);
     if (input.issued_since_year) conditions.push(`year(issue_date) >= ${input.issued_since_year}`);
-    return nearbyRows(context, {
+    return {
       table: "roofing_permits",
       columns: PERMIT_COLUMNS,
       center: centerOf(input),
@@ -267,7 +288,7 @@ const findOpenRoofingPermits = defineTool({
         with_contractor: "contractor_name IS NOT NULL",
         with_bbb_rating: "bbb_rating IS NOT NULL",
       },
-    });
+    };
   },
 });
 
@@ -319,7 +340,7 @@ ORDER BY issue_date DESC NULLS LAST, permit_number LIMIT ${RELATED_ROWS}`
   },
 });
 
-const findLongHeldProperties = defineTool({
+const findLongHeldProperties = defineNearbyTool({
   name: "find_long_held_properties",
   description:
     "Find properties whose current owner has held them longer than a number of years (from the TCAD deed date) within a radius.",
@@ -332,25 +353,24 @@ const findLongHeldProperties = defineTool({
       .describe("Owned strictly longer than this many years."),
     limit,
   }),
-  run: (context, input) =>
-    nearbyRows(context, {
-      table: "properties",
-      columns: PROPERTY_COLUMNS,
-      center: centerOf(input),
-      radiusMiles: input.radius_miles,
-      conditions: [`ownership_years > ${input.min_ownership_years}`],
-      orderBy: "ownership_years DESC, distance_miles, prop_id",
-      rows: input.limit,
-      summary: Object.fromEntries(
-        NON_LOCAL_OWNERS.map((locality) => [
-          `${locality}_owners`,
-          `owner_locality = ${literal(locality)}`,
-        ]),
-      ),
-    }),
+  nearby: (input) => ({
+    table: "properties",
+    columns: PROPERTY_COLUMNS,
+    center: centerOf(input),
+    radiusMiles: input.radius_miles,
+    conditions: [`ownership_years > ${input.min_ownership_years}`],
+    orderBy: "ownership_years DESC, distance_miles, prop_id",
+    rows: input.limit,
+    summary: Object.fromEntries(
+      NON_LOCAL_OWNERS.map((locality) => [
+        `${locality}_owners`,
+        `owner_locality = ${literal(locality)}`,
+      ]),
+    ),
+  }),
 });
 
-const findOutOfAreaOwners = defineTool({
+const findOutOfAreaOwners = defineNearbyTool({
   name: "find_out_of_area_owners",
   description:
     "Find properties whose owner's mailing address is outside the Austin area: regional (elsewhere in Texas), out of state or foreign.",
@@ -363,19 +383,18 @@ const findOutOfAreaOwners = defineTool({
       .describe("Owner localities to include."),
     limit,
   }),
-  run: (context, input) =>
-    nearbyRows(context, {
-      table: "properties",
-      columns: PROPERTY_COLUMNS,
-      center: centerOf(input),
-      radiusMiles: input.radius_miles,
-      conditions: [`owner_locality IN (${list(input.localities)})`],
-      orderBy: "distance_miles, prop_id",
-      rows: input.limit,
-      summary: Object.fromEntries(
-        input.localities.map((locality) => [locality, `owner_locality = ${literal(locality)}`]),
-      ),
-    }),
+  nearby: (input) => ({
+    table: "properties",
+    columns: PROPERTY_COLUMNS,
+    center: centerOf(input),
+    radiusMiles: input.radius_miles,
+    conditions: [`owner_locality IN (${list(input.localities)})`],
+    orderBy: "distance_miles, prop_id",
+    rows: input.limit,
+    summary: Object.fromEntries(
+      input.localities.map((locality) => [locality, `owner_locality = ${literal(locality)}`]),
+    ),
+  }),
 });
 
 const locatePlace = defineTool({
@@ -438,12 +457,47 @@ export async function runTool(
   rawInput: unknown,
   context: ToolContext,
 ): Promise<ToolResult> {
+  const tool = toolNamed(name);
+  const output = await tool.run(context, parsedInput(tool, rawInput));
+  return { tool: name, dataset: context.dataset, ...output };
+}
+
+export async function matchDensity(
+  name: string,
+  rawInput: unknown,
+  context: ToolContext,
+  cellDegrees: number,
+): Promise<DensityCell[]> {
+  const tool = toolNamed(name);
+  if (!tool.nearby) throw new ToolInputError(`${name} is not a radius search.`);
+  const { table, center, radiusMiles, conditions } = tool.nearby(parsedInput(tool, rawInput));
+  const cell = (column: string) => `round(${column} / ${cellDegrees}) * ${cellDegrees}`;
+  const found = await context.sql.all(`WITH nearby AS (
+  SELECT *, ${distanceMiles(center)} AS distance_miles FROM ${table}
+  WHERE ${withinBox(center, radiusMiles)}
+)
+SELECT ${cell("latitude")} AS latitude, ${cell("longitude")} AS longitude, count(*) AS matches
+FROM nearby
+WHERE ${[`distance_miles <= ${radiusMiles}`, ...conditions].join("\n  AND ")}
+GROUP BY ALL
+ORDER BY matches DESC, latitude, longitude`);
+  return found.map((row) => ({
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    matches: Number(row.matches),
+  }));
+}
+
+function toolNamed(name: string): QueryTool {
   const tool = TOOLS.find((candidate) => candidate.name === name);
   if (!tool) throw new ToolInputError(`Unknown tool "${name}".`);
+  return tool;
+}
+
+function parsedInput(tool: QueryTool, rawInput: unknown): unknown {
   const parsed = tool.input.safeParse(rawInput ?? {});
   if (!parsed.success) {
-    throw new ToolInputError(`Invalid input for ${name}: ${z.prettifyError(parsed.error)}`);
+    throw new ToolInputError(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`);
   }
-  const output = await tool.run(context, parsed.data);
-  return { tool: name, dataset: context.dataset, ...output };
+  return parsed.data;
 }
