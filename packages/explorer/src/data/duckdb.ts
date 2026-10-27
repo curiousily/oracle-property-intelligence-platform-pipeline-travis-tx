@@ -1,10 +1,11 @@
 import * as duckdb from "@duckdb/duckdb-wasm";
-import { publishedTables, type Row, type SqlRunner } from "@travis-oracle/query-core";
+import type { ReadOnlySql } from "@travis-oracle/mcp/server";
+import { publishedTables, type Row } from "@travis-oracle/query-core";
 import { DataType, type Field, type Table } from "apache-arrow";
 import type { Dataset } from "./dataset.js";
 
 
-export interface Database extends SqlRunner {
+export interface Database extends ReadOnlySql {
   query(sql: string): Promise<QueryResult>;
 }
 
@@ -15,6 +16,7 @@ export interface QueryResult {
 }
 
 const ISO_DATE_LENGTH = 10;
+const TRAILING_SEMICOLONS = /;+$/;
 const SETTINGS = ["SET enable_http_metadata_cache = true", "SET enable_object_cache = true"];
 
 export async function openDatabase(dataset: Dataset): Promise<Database> {
@@ -43,7 +45,13 @@ export async function openDatabase(dataset: Dataset): Promise<Database> {
       elapsedMs: Math.round(performance.now() - started),
     };
   };
-  return { query, all: async (sql) => (await query(sql)).rows };
+  return {
+    query,
+    all: async (sql) => (await query(sql)).rows,
+    readOnly: async (sql, maxRows) =>
+      (await query(`SELECT * FROM (${sql.trim().replace(TRAILING_SEMICOLONS, "")}) LIMIT ${maxRows}`))
+        .rows,
+  };
 }
 
 function rowsOf(table: Table): Row[] {

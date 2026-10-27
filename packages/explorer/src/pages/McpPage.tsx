@@ -1,13 +1,19 @@
-import { runTool, type ToolResult, toolSchemas } from "@travis-oracle/query-core";
-import { useState } from "react";
-import { Card, DataTable, Disclosure, ErrorNote, Spinner } from "../components/ui.js";
+import type { JSONRPCMessage, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { useEffect, useState } from "react";
+import { Badge, Card, DataTable, Disclosure, ErrorNote, Spinner } from "../components/ui.js";
 import type { Dataset } from "../data/dataset.js";
 import type { Database } from "../data/duckdb.js";
+import {
+  connectMcp,
+  McpDirection,
+  type McpSession,
+  type McpToolResult,
+} from "../mcp/mcp-session.js";
 import { datasetInfo } from "./dataset-info.js";
 
-const SCHEMAS = toolSchemas();
 const REPOSITORY_URL =
   "https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx";
+const FIRST_TOOL = "find_aged_roofs";
 const EXAMPLE_INPUTS: Record<string, object> = {
   find_aged_roofs: { place: "Rollingwood", radius_miles: 5, min_roof_age_years: 15, limit: 10 },
   find_open_roofing_permits: {
@@ -27,6 +33,10 @@ const EXAMPLE_INPUTS: Record<string, object> = {
   find_out_of_area_owners: { place: "Manor", radius_miles: 2, limit: 10 },
   locate_place: { name: "Bee Cave" },
   dataset_summary: {},
+  get_schema: {},
+  run_sql: {
+    sql: "SELECT roof_age_confidence, count(*) AS properties FROM properties GROUP BY 1 ORDER BY 2 DESC",
+  },
 };
 const MCP_SETUP = `git clone ${REPOSITORY_URL}
 cd oracle-property-intelligence-platform-pipeline-travis-tx && npm ci
@@ -40,13 +50,53 @@ npm run --silent mcp
 # Optional environment
 TRAVIS_ORACLE_GATEWAY=https://ipfs.orbitor.dev   # read the Parquet tables straight from public IPFS
 TRAVIS_ORACLE_ROOT_CID=<dataset root CID>        # pin any published snapshot instead of the latest`;
+const MCP_CONFIG = JSON.stringify(
+  {
+    mcpServers: {
+      "travis-oracle": {
+        command: "npm",
+        args: [
+          "run",
+          "--silent",
+          "mcp",
+          "--prefix",
+          "/path/to/oracle-property-intelligence-platform-pipeline-travis-tx",
+        ],
+      },
+    },
+  },
+  null,
+  2,
+);
+
+interface LoggedMessage {
+  sequence: number;
+  direction: McpDirection;
+  message: JSONRPCMessage;
+}
 
 export function McpPage({ dataset, database }: { dataset: Dataset; database: Database }) {
-  const [tool, setTool] = useState(SCHEMAS[0]?.name ?? "");
-  const [input, setInput] = useState(JSON.stringify(EXAMPLE_INPUTS[tool] ?? {}, null, 2));
-  const [result, setResult] = useState<ToolResult>();
+  const [session, setSession] = useState<McpSession>();
+  const [messages, setMessages] = useState<LoggedMessage[]>([]);
+  const [tool, setTool] = useState(FIRST_TOOL);
+  const [input, setInput] = useState(JSON.stringify(EXAMPLE_INPUTS[FIRST_TOOL], null, 2));
+  const [result, setResult] = useState<McpToolResult>();
   const [error, setError] = useState<string>();
   const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    connectMcp(database, datasetInfo(dataset), (direction, message) => {
+      if (active) {
+        setMessages((logged) => [...logged, { sequence: logged.length + 1, direction, message }]);
+      }
+    })
+      .then((connected) => active && setSession(connected))
+      .catch((failure: unknown) => active && setError(String(failure)));
+    return () => {
+      active = false;
+    };
+  }, [database, dataset]);
 
   const choose = (name: string) => {
     setTool(name);
@@ -55,13 +105,12 @@ export function McpPage({ dataset, database }: { dataset: Dataset; database: Dat
     setError(undefined);
   };
 
-  const run = async () => {
+  const call = async () => {
+    if (!session) return;
     setRunning(true);
     setError(undefined);
     try {
-      setResult(
-        await runTool(tool, JSON.parse(input), { sql: database, dataset: datasetInfo(dataset) }),
-      );
+      setResult(await session.call(tool, JSON.parse(input)));
     } catch (failure) {
       setResult(undefined);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -70,73 +119,130 @@ export function McpPage({ dataset, database }: { dataset: Dataset; database: Dat
     }
   };
 
+  const chosen = session?.tools.find((candidate) => candidate.name === tool);
+
   return (
     <div className="page">
       <Card
-        title="MCP-ready query interface"
-        subtitle="The same tool definitions back the explorer, the agent, the MCP server and the roofing CRM, so clients query one data model through validated tools."
+        title="MCP-ready: a live MCP session"
+        subtitle={
+          <>
+            This page is an MCP client. It speaks JSON-RPC to the same MCP server that{" "}
+            <code>npm run mcp</code> starts, running here in the browser over DuckDB-WASM through an
+            in-memory transport, so you see exactly what an agent or the roofing CRM sees.
+          </>
+        }
       >
-        <div className="mcp-layout">
-          <div>
-            <h3>Tools</h3>
+        {session ? (
+          <dl className="facts">
+            <dt>Server</dt>
+            <dd>
+              <code>
+                {session.server.name} {session.server.version}
+              </code>
+            </dd>
+            <dt>Tools (tools/list)</dt>
+            <dd>{session.tools.length} read-only tools</dd>
+            <dt>Data model</dt>
+            <dd>the published Parquet tables, unchanged</dd>
+            <dt>Transport here · locally</dt>
+            <dd>in-browser · stdio</dd>
+          </dl>
+        ) : (
+          !error && <Spinner label="Connecting an MCP client to the server…" />
+        )}
+      </Card>
+
+      {session && (
+        <Card
+          title="Tools"
+          subtitle="Listed by the server over tools/list, each with its JSON Schema."
+        >
+          <div className="mcp-layout">
             <ul className="tool-list">
-              {SCHEMAS.map((schema) => (
-                <li key={schema.name}>
+              {session.tools.map((candidate) => (
+                <li key={candidate.name}>
                   <button
                     type="button"
-                    className={schema.name === tool ? "tool active" : "tool"}
-                    onClick={() => choose(schema.name)}
+                    className={candidate.name === tool ? "tool active" : "tool"}
+                    onClick={() => choose(candidate.name)}
                   >
-                    <code>{schema.name}</code>
-                    <span>{schema.description}</span>
+                    <code>{candidate.name}</code>
+                    <span>{candidate.description}</span>
                   </button>
                 </li>
               ))}
             </ul>
+            <div>
+              <h3>
+                Call <code>{tool}</code>
+              </h3>
+              <textarea
+                aria-label="Tool input"
+                className="json-input"
+                value={input}
+                spellCheck={false}
+                onChange={(event) => setInput(event.target.value)}
+              />
+              <button type="button" className="button" onClick={call} disabled={running}>
+                Call tool
+              </button>
+              {running && <Spinner label="tools/call…" />}
+              {error && <ErrorNote message={error} />}
+              {result && (
+                <>
+                  <DataTable rows={result.rows} />
+                  {result.related && result.related.length > 0 && (
+                    <DataTable rows={result.related} />
+                  )}
+                </>
+              )}
+              {chosen && <ToolSchema tool={chosen} />}
+              <h3>JSON-RPC messages</h3>
+              <ol className="rpc-log">
+                {messages.map((logged) => (
+                  <li key={logged.sequence}>
+                    <Badge tone={logged.direction === McpDirection.ToServer ? "info" : "good"}>
+                      {logged.direction}
+                    </Badge>{" "}
+                    <code>{messageLabel(logged.message)}</code>
+                    <Disclosure summary="message">
+                      <pre className="code-block">{JSON.stringify(logged.message, null, 2)}</pre>
+                    </Disclosure>
+                  </li>
+                ))}
+              </ol>
+            </div>
           </div>
-          <div>
-            <h3>
-              Try <code>{tool}</code>
-            </h3>
-            <textarea
-              aria-label="Tool input"
-              className="json-input"
-              value={input}
-              spellCheck={false}
-              onChange={(event) => setInput(event.target.value)}
-            />
-            <button type="button" className="button" onClick={run} disabled={running}>
-              Call tool
-            </button>
-            {running && <Spinner label="Running…" />}
-            {error && <ErrorNote message={error} />}
-            {result && (
-              <>
-                <DataTable rows={result.rows} />
-                {result.related && result.related.length > 0 && <DataTable rows={result.related} />}
-                <Disclosure summary="Raw tool result (JSON)">
-                  <pre className="code-block">{JSON.stringify(result, null, 2)}</pre>
-                </Disclosure>
-              </>
-            )}
-            <Disclosure summary="Input JSON Schema">
-              <pre className="code-block">
-                {JSON.stringify(
-                  SCHEMAS.find((schema) => schema.name === tool)?.inputSchema,
-                  null,
-                  2,
-                )}
-              </pre>
-            </Disclosure>
-          </div>
-        </div>
-      </Card>
+        </Card>
+      )}
+
       <Card
         title="Connect an MCP client"
-        subtitle="The stdio MCP server runs the same tools with DuckDB over the published Parquet tables; it resolves the latest publication by CID."
+        subtitle="The stdio MCP server runs the same tools with DuckDB over the published Parquet tables; it resolves the latest publication by CID. The roofing CRM's assistant calls these same tool definitions."
       >
         <pre className="code-block">{MCP_SETUP}</pre>
+        <Disclosure summary="Client configuration (mcpServers)">
+          <pre className="code-block">{MCP_CONFIG}</pre>
+        </Disclosure>
       </Card>
     </div>
   );
+}
+
+function ToolSchema({ tool }: { tool: Tool }) {
+  return (
+    <Disclosure summary="Input JSON Schema">
+      <pre className="code-block">{JSON.stringify(tool.inputSchema, null, 2)}</pre>
+    </Disclosure>
+  );
+}
+
+function messageLabel(message: JSONRPCMessage): string {
+  const id = "id" in message ? ` #${message.id}` : "";
+  if ("method" in message) {
+    const name = (message.params as { name?: unknown } | undefined)?.name;
+    return `${message.method}${typeof name === "string" ? ` ${name}` : ""}${id}`;
+  }
+  return `${"error" in message ? "error" : "result"}${id}`;
 }

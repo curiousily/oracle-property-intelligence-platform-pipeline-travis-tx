@@ -111,12 +111,19 @@ test("runs the agent's tool loop in the browser and shows the evidence", async (
   await page.screenshot({ path: `${SCREENSHOTS}/agent.png`, fullPage: true });
 });
 
-test("calls an MCP tool from its JSON schema", async ({ page }) => {
+test("speaks MCP: lists the server's tools over tools/list and calls one over tools/call", async ({
+  page,
+}) => {
   await open(page, "mcp");
 
+  await expect(page.locator(".facts")).toContainText("travis-oracle");
   await page.getByRole("button", { name: /locate_place/ }).click();
   await page.getByRole("button", { name: "Call tool" }).click();
 
   await expect(page.locator(".data-table")).toContainText("Bee Cave");
+  const log = page.locator(".rpc-log");
+  await expect(log).toContainText("initialize");
+  await expect(log).toContainText("tools/list");
+  await expect(log).toContainText("tools/call locate_place");
   await page.screenshot({ path: `${SCREENSHOTS}/mcp.png`, fullPage: true });
 });

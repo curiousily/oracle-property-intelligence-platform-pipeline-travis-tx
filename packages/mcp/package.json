@@ -2,6 +2,9 @@
   "name": "@travis-oracle/mcp",
   "private": true,
   "type": "module",
+  "exports": {
+    "./server": "./src/server.ts"
+  },
   "scripts": {
     "start": "tsx src/main.ts",
     "test": "vitest run",

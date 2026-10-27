@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type DatasetInfo, type Row, runTool, TABLES, TOOLS } from "@travis-oracle/query-core";
 import { z } from "zod";
-import type { DuckDbRunner } from "./duckdb-runner.js";
 
 const SERVER_NAME = "travis-oracle";
 const SERVER_VERSION = "1.0.0";
@@ -10,8 +9,13 @@ const DEFAULT_SQL_ROWS = 200;
 const MAX_SQL_ROWS = 1_000;
 const READ_ONLY = { readOnlyHint: true, openWorldHint: false } as const;
 
+export interface ReadOnlySql {
+  all(sql: string): Promise<Row[]>;
+  readOnly(sql: string, maxRows: number): Promise<Row[]>;
+}
+
 export interface ServerDependencies {
-  sql: Pick<DuckDbRunner, "all" | "readOnly">;
+  sql: ReadOnlySql;
   dataset: DatasetInfo;
 }
 
@@ -60,7 +64,7 @@ export function createServer({ sql, dataset }: ServerDependencies): McpServer {
 }
 
 async function describeTables(
-  sql: ServerDependencies["sql"],
+  sql: ReadOnlySql,
 ): Promise<Record<string, { column: string; type: string }[]>> {
   const columns = await sql.all(`SELECT table_name, column_name, data_type
 FROM information_schema.columns

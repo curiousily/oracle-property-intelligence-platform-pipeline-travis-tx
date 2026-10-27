@@ -1,41 +1,120 @@
-import { mkdir, readdir, rename, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, type Locator, type Page } from "@playwright/test";
+import { Narrator } from "./narration.js";
+import { stdioSession } from "./stdio-session.js";
 
 const EXPLORER_URL =
   process.env.EXPLORER_URL ?? "https://travis-oracle-explorer.curiousily.workers.dev";
 const OUTPUT_DIR = process.env.DEMO_DIR ?? "demo/output";
+const NARRATION_CACHE_DIR = "demo/narration-cache";
+const VIDEO_FILE = "explorer-demo.mp4";
+const TERMINAL_URL = "https://terminal.demo/";
 const VIEWPORT = { width: 1440, height: 900 };
-const READ_MS = 4_500;
-const LONG_READ_MS = 7_000;
+const PAUSE_AFTER_LINE_MS = 900;
 const SETTLE_MS = 1_500;
 const DATA_TIMEOUT_MS = 120_000;
 const AGENT_TIMEOUT_MS = 180_000;
+const TERMINAL_LINE_DELAY_MS = 450;
 const PLACE = "Rollingwood";
 const AGENT_PLACE = "West Lake Hills";
+const AGENT_QUESTION = `Which properties in Travis County within five miles of ${AGENT_PLACE} have roofs older than 15 years?`;
+const FOLLOW_UP =
+  "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?";
+const THOUSAND = 1_000;
+const MILLION = 1_000_000;
+const EXACT_BELOW = 10_000;
+const PERCENT = 100;
 
-const CAPTION_SCRIPT = `
-  window.demoCaption = (title, body) => {
-    let box = document.getElementById("demo-caption");
-    if (!box) {
-      box = document.createElement("div");
-      box.id = "demo-caption";
-      box.style.cssText = "position:fixed;left:50%;top:6px;transform:translateX(-50%);width:min(1100px,96vw);z-index:99999;" +
-        "background:rgba(17,20,24,.94);color:#fff;padding:10px 20px;border-radius:10px;font:14px/1.4 Inter,system-ui,sans-serif;" +
-        "box-shadow:0 8px 30px rgba(0,0,0,.35)";
-      document.body.appendChild(box);
-    }
-    box.innerHTML = "<div style='font-weight:700;font-size:16px;margin-bottom:4px'>" + title + "</div><div>" + body + "</div>";
+type Counts = Record<string, Record<string, number>>;
+
+async function liveCounts(): Promise<Counts> {
+  const publications = (await (await fetch(`${EXPLORER_URL}/api/publications`)).json()) as {
+    buildId: string;
+    rootCid: string;
+  }[];
+  const latest = [...publications].sort((a, b) => a.buildId.localeCompare(b.buildId)).at(-1);
+  if (!latest) throw new Error("There is no publication to demo.");
+  const coverage = await fetch(`${EXPLORER_URL}/ipfs/${latest.rootCid}/coverage.json`);
+  return (await coverage.json()) as Counts;
+}
+
+function about(value: number): string {
+  if (value < EXACT_BELOW) return value.toLocaleString("en-US");
+  if (value < MILLION) return `about ${Math.round(value / THOUSAND)} thousand`;
+  return `about ${(value / MILLION).toFixed(1)} million`;
+}
+
+function linesFor(counts: Counts) {
+  const count = (group: string, key: string) => Number(counts[group]?.[key] ?? 0);
+  const properties = count("properties", "rows");
+  const located = Math.round((count("properties", "with_coordinates") / properties) * PERCENT);
+  return {
+    intro:
+      "So, this is the Travis County Oracle. A daily pipeline pulls in Travis County property, permit, ownership and contractor data, resolves contractors against the Texas business registries, and every week publishes a snapshot to IPFS. That snapshot is what this explorer, an AI agent and MCP clients all read.",
+    summary: `The latest build holds ${about(properties)} properties, ${about(count("permits", "rows"))} City of Austin permits, ${about(count("roofing_permits", "rows"))} roofing permits and ${about(count("contractors", "rows"))} contractors, and ${located} percent of properties have coordinates.`,
+    kinds: `Each kind of record shows its source and when it was collected. ${capitalized(about(count("contractors", "with_registry_match")))} contractors are resolved to a Texas Comptroller taxpayer, and ${about(count("businesses", "rows"))} sales tax outlets are linked to the properties at their addresses.`,
+    sources:
+      "Every source comes with its publisher, how it's refreshed, and its known limitations. That list ships inside each published snapshot, too.",
+    runs: "Here's the run history: every ingest, every build with its row deltas, and every publication, newest first. When a source hasn't changed, the run detects it and skips the download.",
+    cost: "And it all runs on GitHub Actions, Cloudflare's free plan, DuckDB in the browser and free IPFS pinning, so there's nothing to pay for.",
+    sql: "The SQL console runs DuckDB right in the browser. It reads the published Parquet files with HTTP range requests, so there's no database server at all.",
+    tableCounts: "These row counts come straight from the published files.",
+    registry:
+      "And here are the busiest roofing contractors with their Texas registry record: the legal name, the type of organization, whether it's active, and how each match was made.",
+    manifest:
+      "The publication page lists every published file with its content ID, size and SHA-256 hash.",
+    gateways:
+      "Here, the coverage file is fetched by its content ID from two independent public gateways, and its size and hash match the manifest.",
+    ipns: "The IPNS name resolves live to the newest manifest. Think of IPNS as the pointer, and the content ID as the snapshot itself.",
+    history:
+      "Every publication keeps its own content IDs. Earlier roots still resolve on public gateways, and each manifest links back to the one before it.",
+    agedRoofs: `On the leads map, these are roofs older than fifteen years within five miles of ${PLACE}. The best evidence comes first: a completed reroof permit, then a new-construction permit, then the year built.`,
+    openPermits:
+      "Switching to open roofing permits shows permits still open five years or more, longest open first, with the contractor and its BBB grade.",
+    neverFinished:
+      "If I add permits that expired without a final inspection, and keep only the ones that list a contractor, archived BBB grades start showing up.",
+    permitDetail:
+      "Each permit shows its status, how long it's been open, and the contractor's BBB grade, dated by the archived snapshot it came from.",
+    agent:
+      "The agent answers the same questions in plain English. A Workers AI model picks the query tools, the tools run right here in the browser, and every answer shows its evidence.",
+    agentAnswer:
+      "The answer lists the matching properties with how each roof age was estimated and how confident it is, and it spells out its assumptions and gaps.",
+    followUp:
+      "Now a follow-up about the same area: which roofing permits have been open for years, and who's the contractor?",
+    followUpAnswer:
+      "It reuses the same area, keeps permits open five years or more that list a contractor, and notes what the matches are missing.",
+    mcpSession:
+      "Finally, the system is MCP-ready. This page is itself an MCP client: it connects to the same MCP server that npm run mcp starts, here running in the browser, and gets its read-only tools from tools list.",
+    mcpCall:
+      "Calling a tool sends a tools call request. The server answers with the same rows the explorer and the agent use, plus the SQL behind them and the dataset's content IDs.",
+    mcpMessage: "Here's that request as raw JSON-RPC, with the tool name and its arguments.",
+    mcpConnect:
+      "To connect your own client, add the server with one command, or paste this configuration. The roofing CRM's assistant calls these very same tools, so the data model never changes.",
+    mcpStdio: `And this is a real session over standard input and output: a plain MCP client starts npm run mcp, lists the tools, and finds aged roofs near ${PLACE} in the published dataset.`,
   };
-`;
+}
 
-async function caption(page: Page, title: string, body: string, pauseMs = READ_MS) {
-  await page.evaluate(
-    ({ heading, text }) =>
-      (window as unknown as { demoCaption(a: string, b: string): void }).demoCaption(heading, text),
-    { heading: title, text: body },
-  );
-  await page.waitForTimeout(pauseMs);
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+function terminalPage(transcript: readonly string[]): string {
+  const escaped = (line: string) =>
+    line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const lines = transcript
+    .map(
+      (line, index) =>
+        `<div style="animation-delay:${index * TERMINAL_LINE_DELAY_MS}ms">${escaped(line)}</div>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>MCP client over stdio</title><style>
+    body{margin:0;background:#0f1216;color:#d7dde4;font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+    header{padding:14px 24px;background:#1a1f26;color:#9aa5b1;font-family:Inter,system-ui,sans-serif}
+    main{padding:20px 24px;white-space:pre-wrap;word-break:break-word}
+    main div{opacity:0;animation:show .2s forwards}
+    @keyframes show{to{opacity:1}}
+  </style></head><body><header>Terminal · a plain MCP client (MCP TypeScript SDK) driving <b>npm run mcp</b> over stdio · live session, ${new Date().toISOString().slice(0, 10)}</header><main>${lines}</main></body></html>`;
 }
 
 async function show(locator: Locator) {
@@ -52,6 +131,12 @@ async function open(page: Page, hash: string) {
 }
 
 async function record() {
+  const lines = linesFor(await liveCounts());
+  const transcript = await stdioSession();
+  const narrator = await Narrator.prepare(Object.values(lines), NARRATION_CACHE_DIR);
+  const narrate = async (page: Page, line: string) =>
+    page.waitForTimeout(narrator.say(line) + PAUSE_AFTER_LINE_MS);
+
   await rm(OUTPUT_DIR, { recursive: true, force: true });
   await mkdir(OUTPUT_DIR, { recursive: true });
   const browser = await chromium.launch();
@@ -59,231 +144,124 @@ async function record() {
     viewport: VIEWPORT,
     recordVideo: { dir: OUTPUT_DIR, size: VIEWPORT },
   });
-  await context.addInitScript(CAPTION_SCRIPT);
   const page = await context.newPage();
+  await page.route(TERMINAL_URL, (route) =>
+    route.fulfill({ contentType: "text/html", body: terminalPage(transcript) }),
+  );
+  narrator.startRecording();
 
   await open(page, "overview");
-  await caption(
-    page,
-    "Travis County Oracle",
-    "The pipeline has loaded Travis County, TX property, permit, ownership, contractor, BBB and coordinate data, published it to IPFS as content-addressed snapshots, and serves it to a UI, an agent and MCP clients.",
-    LONG_READ_MS,
-  );
-  await caption(
-    page,
-    "Pipeline run summary",
-    "The latest build: 453,713 properties, 2.4 million permits, 37,613 roofing permits, 6,062 reconciled contractors, 98% of properties located.",
-  );
+  await narrate(page, lines.intro);
+  await narrate(page, lines.summary);
   await show(page.getByRole("heading", { name: "Records by kind" }));
-  await caption(
-    page,
-    "Records by source",
-    "Property, permit, ownership, contractor (with BBB grade), business and coordinate records, each with its source and collection time.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.kinds);
   await show(page.getByRole("heading", { name: "Sources" }));
-  await caption(
-    page,
-    "Documented source limitations",
-    "Every source's publisher, refresh strategy and known constraints ship inside each published snapshot (sources.json).",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.sources);
   await show(page.getByRole("heading", { name: "Run history" }));
-  await caption(
-    page,
-    "Continuous, incremental runs",
-    "Every daily ingest, build (with row deltas) and weekly publication, newest first. Unchanged sources are detected and skipped.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.runs);
   await show(page.getByRole("heading", { name: "Infrastructure and cost" }));
-  await caption(
-    page,
-    "No infrastructure cost for Oracle",
-    "GitHub Actions, Cloudflare free plans, DuckDB in the browser and free IPFS pinning: nothing to pay for by default.",
-  );
+  await narrate(page, lines.cost);
 
   await open(page, "sql");
-  await caption(
-    page,
-    "DuckDB-backed query layer",
-    "DuckDB-WASM runs in this browser and reads the published Parquet tables with HTTP range requests. No database server.",
-  );
+  await narrate(page, lines.sql);
   await page.getByRole("button", { name: "Run query" }).click();
   await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(page, "Rows per table", "Counted directly over the published Parquet files.");
+  await narrate(page, lines.tableCounts);
+  await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();
   await page
-    .getByRole("button", { name: "Busiest roofing contractors and their BBB grades" })
-    .click();
-  await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    "Contractors with BBB grades",
-    "Contractors reconciled from permit names and phones, matched to archived BBB profiles with a method and confidence.",
-    LONG_READ_MS,
-  );
+    .locator(".data-table thead")
+    .getByText("registry_name")
+    .waitFor({ timeout: DATA_TIMEOUT_MS });
+  await narrate(page, lines.registry);
 
   await open(page, "publication");
-  await caption(
-    page,
-    "Artifact manifest",
-    "Every published object with its CIDv1, logical name, size, codec and SHA-256. Gateway links are derived from the CIDs.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.manifest);
   await show(page.getByRole("heading", { name: "Objects" }));
-  await page.waitForTimeout(READ_MS);
   const coverage = page.locator("tr").filter({ hasText: "coverage.json" });
   await coverage.getByRole("button", { name: /verify/ }).click();
   await coverage.getByText("gw.ipfs-lens.dev: verified").waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    "Retrieved from two independent public gateways",
-    "coverage.json fetched by CID from ipfs.orbitor.dev and gw.ipfs-lens.dev in this browser; size and SHA-256 match the manifest.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.gateways);
   await show(page.getByRole("heading", { name: "Artifact manifest" }));
   await page.getByRole("button", { name: /Resolve now/ }).click();
   await page.getByText(/resolves to/).waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    "IPNS points at the latest manifest",
-    "The IPNS name resolves live to the newest manifest CID. IPNS is the pointer; the CID is the snapshot. A CAR of the root DAG is on GitHub Releases.",
-    LONG_READ_MS,
-  );
-  await show(page.getByRole("heading", { name: "Publication history" }));
-  const roots = await page.getByRole("button", { name: "check root" }).all();
-  for (const button of roots) await button.click();
+  await narrate(page, lines.ipns);
+  const history = page.locator(".card").filter({ hasText: "Publication history" });
+  await show(history);
+  const publications = history.locator("tbody tr");
+  for (let row = 0; row < (await publications.count()); row += 1) {
+    const check = publications.nth(row).getByRole("button", { name: "check root" });
+    if ((await check.count()) > 0) await check.click();
+  }
   await page.waitForFunction(() => !document.body.textContent?.includes("checking…"), undefined, {
     timeout: DATA_TIMEOUT_MS,
   });
-  await caption(
-    page,
-    "Incremental publications, immutable CIDs",
-    "Each publication has its own CIDs; earlier roots still resolve on the public gateways and each manifest links its predecessor.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.history);
 
   await open(page, "leads");
   await page.getByLabel("Center on a place").selectOption(PLACE);
-  await page
-    .locator(".card")
-    .filter({ hasText: "matches within" })
-    .locator("tbody tr")
-    .first()
-    .waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    `Roofs older than 15 years within 5 miles of ${PLACE}`,
-    "Best-evidenced first: completed reroof permit, then new-construction permit, then year built. Each row has its coordinates and source.",
-    LONG_READ_MS,
-  );
   const results = page.locator(".card").filter({ hasText: "matches within" });
+  await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  await narrate(page, lines.agedRoofs);
   await show(results);
-  await page.waitForTimeout(READ_MS);
   await show(page.getByRole("tab", { name: "Aged roofs" }));
   await page.getByRole("tab", { name: "Open roofing permits" }).click();
   await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    "Open roofing permits, longest open first",
-    "Permits that are still open five years or more, with years open, contractor and BBB grade, linked to the city's permit record.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.openPermits);
   await page.getByLabel(/Also permits that expired/).check();
   await page.getByLabel(/Only permits that list a contractor/).check();
   await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
   await page.waitForTimeout(SETTLE_MS);
   await show(results);
-  await caption(
-    page,
-    "Never finished, with a listed contractor",
-    "Adding permits that expired without a final inspection, and keeping those that list a contractor, brings in archived BBB grades.",
-    LONG_READ_MS,
-  );
-  const graded = results
+  await narrate(page, lines.neverFinished);
+  await results
     .locator("tbody tr")
     .filter({ hasText: /\bA\+|\bA-|\bB\+/ })
-    .first();
-  await graded.click();
+    .first()
+    .click();
   await page.waitForTimeout(SETTLE_MS);
-  await caption(
-    page,
-    "Permit detail",
-    "Status, open duration, contractor and BBB grade with its archived snapshot date.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.permitDetail);
 
   await open(page, "agent");
-  await caption(
-    page,
-    "The same questions through the agent",
-    "A Workers AI model picks the query tools; the tools run in this browser over the published dataset, and every answer shows its evidence.",
-  );
-  await page
-    .getByLabel("Question")
-    .fill(
-      `Which properties in Travis County within five miles of ${AGENT_PLACE} have roofs older than 15 years?`,
-    );
+  await narrate(page, lines.agent);
+  await page.getByLabel("Question").fill(AGENT_QUESTION);
   await page.getByRole("button", { name: "Ask" }).click();
   await page.locator(".bubble.agent").first().waitFor({ timeout: AGENT_TIMEOUT_MS });
   await show(page.locator(".evidence").first());
-  await page.waitForTimeout(READ_MS);
   await show(page.locator(".bubble.agent").first());
-  await caption(
-    page,
-    "Answer with source-backed evidence",
-    "Matching properties, the roof-age basis and confidence, identifiers and the assumptions behind them.",
-    LONG_READ_MS,
-  );
-  await caption(
-    page,
-    "Follow-up: long-open permits and contractors",
-    "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?",
-    READ_MS,
-  );
-  await page
-    .getByLabel("Question")
-    .fill(
-      "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?",
-    );
+  await narrate(page, lines.agentAnswer);
+  await narrate(page, lines.followUp);
+  await page.getByLabel("Question").fill(FOLLOW_UP);
   await page.getByRole("button", { name: "Ask" }).click();
   await page.locator(".bubble.agent").nth(1).waitFor({ timeout: AGENT_TIMEOUT_MS });
   await show(page.locator(".turn").nth(1));
-  await page.waitForTimeout(READ_MS);
   await show(page.locator(".bubble.agent").nth(1));
-  await caption(
-    page,
-    "Answer to the follow-up",
-    "The agent reuses the area, keeps permits still open five years or more that list a contractor, and states what the matches lack.",
-    LONG_READ_MS,
-  );
+  await narrate(page, lines.followUpAnswer);
 
   await open(page, "mcp");
-  await caption(
-    page,
-    "MCP-ready",
-    "The same validated tools back the explorer, the agent, the stdio MCP server and the roofing CRM, with JSON Schemas for every input.",
-  );
+  await page.locator(".facts").getByText("travis-oracle").waitFor({ timeout: DATA_TIMEOUT_MS });
+  await narrate(page, lines.mcpSession);
   await page.getByRole("button", { name: /find_open_roofing_permits/ }).click();
   await page.getByRole("button", { name: "Call tool" }).click();
   await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
-  await caption(
-    page,
-    "Calling a tool",
-    "An MCP client receives the same rows, the SQL and the dataset CIDs.",
-  );
+  await narrate(page, lines.mcpCall);
+  const request = page.locator(".rpc-log li").filter({ hasText: "tools/call" }).last();
+  await request.getByText("message").click();
+  await show(page.getByRole("heading", { name: "JSON-RPC messages" }));
+  await narrate(page, lines.mcpMessage);
   await show(page.getByRole("heading", { name: "Connect an MCP client" }));
-  await caption(
-    page,
-    "Connect any MCP client",
-    "npm run mcp starts the stdio server; it queries the latest publication over HTTP, or straight from public IPFS.",
-    LONG_READ_MS,
-  );
+  await page.getByText("Client configuration (mcpServers)").click();
+  await narrate(page, lines.mcpConnect);
+  await page.goto(TERMINAL_URL);
+  await page.waitForTimeout(transcript.length * TERMINAL_LINE_DELAY_MS);
+  await narrate(page, lines.mcpStdio);
 
   const video = page.video();
   await context.close();
   await browser.close();
   const recorded = await video?.path();
-  if (recorded) await rename(recorded, join(OUTPUT_DIR, "explorer-demo.webm"));
+  if (!recorded) throw new Error("Playwright did not record a video.");
+  await narrator.mixInto(recorded, join(OUTPUT_DIR, VIDEO_FILE));
+  await rm(recorded);
   console.log(await readdir(OUTPUT_DIR));
 }
 

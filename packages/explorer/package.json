@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@travis-oracle/mcp": "*",
     "@travis-oracle/query-core": "*",
     "apache-arrow": "^17.0.0",
     "maplibre-gl": "^6.16.0",
