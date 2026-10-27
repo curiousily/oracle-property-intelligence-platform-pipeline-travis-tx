@@ -788,6 +788,15 @@ input[type="range"] {
   margin-bottom: 10px;
 }
 
+.mcp-layout > div {
+  min-width: 0;
+}
+
+.mcp-layout .data-table {
+  display: block;
+  overflow-x: auto;
+}
+
 .rpc-log {
   margin: 0;
   padding-left: 24px;

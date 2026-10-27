@@ -9,7 +9,7 @@ const VOICE_MODEL = "google/gemini-3.8-flash-tts";
 const VOICE = "Charon";
 const DELIVERY =
   "Narrate a software demo the way a senior engineer explains it to a teammate: relaxed, warm and conversational, like talking, not reading; still clear, credible and professional. Natural rhythm and small pauses, no announcer or sales voice.";
-const CHECK_MODEL = "google/gemini-3.8-flash";
+const CHECK_MODELS = ["google/gemini-3.8-flash", "openai/gpt-audio-mini"];
 const CHECK_PROMPT =
   "Transcribe this narration clip exactly, word for word. Reply with the transcript only.";
 const PCM_SAMPLE_RATE = 24_000;
@@ -134,11 +134,23 @@ async function speak(text: string, apiKey: string): Promise<Buffer> {
 }
 
 async function checkTranscript(text: string, wav: string, apiKey: string): Promise<void> {
+  let transcript = "";
+  for (const model of CHECK_MODELS) {
+    transcript ||= await transcribe(wav, apiKey, model);
+  }
+  const difference = editDistance(spoken(text), spoken(transcript)) / spoken(text).length;
+  if (difference > MAX_TRANSCRIPT_DIFFERENCE) {
+    throw new Error(`Narration does not match its script.\nScript: ${text}\nHeard:  ${transcript}`);
+  }
+}
+
+async function transcribe(wav: string, apiKey: string, model: string): Promise<string> {
   const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
-      model: CHECK_MODEL,
+      model,
+      modalities: ["text"],
       temperature: 0,
       messages: [
         {
@@ -155,14 +167,8 @@ async function checkTranscript(text: string, wav: string, apiKey: string): Promi
     }),
   });
   if (!response.ok) throw new Error(`Transcription failed (${response.status})`);
-  const transcript = String(
-    ((await response.json()) as { choices: { message: { content: string } }[] }).choices[0]?.message
-      .content ?? "",
-  );
-  const difference = editDistance(spoken(text), spoken(transcript)) / spoken(text).length;
-  if (difference > MAX_TRANSCRIPT_DIFFERENCE) {
-    throw new Error(`Narration does not match its script.\nScript: ${text}\nHeard:  ${transcript}`);
-  }
+  const answer = (await response.json()) as { choices: { message: { content: string | null } }[] };
+  return (answer.choices[0]?.message.content ?? "").trim();
 }
 
 function spoken(text: string): string {
