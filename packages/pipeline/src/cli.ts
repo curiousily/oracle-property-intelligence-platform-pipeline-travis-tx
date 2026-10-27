@@ -1,58 +1,25 @@
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { type BuildResult, buildLeadTables } from "./application/build-lead-tables.js";
-import { ingestSnapshot } from "./application/ingest-snapshot.js";
-import { ingestSource } from "./application/ingest-source.js";
-import { ingestTcadExport } from "./application/ingest-tcad-export.js";
-import { type IngestWindow, WindowKind } from "./domain/ingest-window.js";
+import { runBuild } from "./commands/build-command.js";
+import { isSourceId, runIngest } from "./commands/ingest-command.js";
+import { runPublish } from "./commands/publish-command.js";
 import { isoDateOf } from "./domain/iso-date.js";
 import { runIdAt } from "./domain/run-id.js";
-import { SourceId } from "./domain/source-id.js";
-import { ArcGisParcelLayer } from "./infrastructure/arcgis-parcel-layer.js";
-import { DuckDbFixedWidthTransformer } from "./infrastructure/duckdb-fixed-width-transformer.js";
-import { DuckDbLeadWarehouse } from "./infrastructure/duckdb-lead-warehouse.js";
-import { FileArtifactPaths, TABLES_DIR } from "./infrastructure/file-artifact-paths.js";
-import { FileRawStore, RAW_DIR, RAW_PAGE_GLOB } from "./infrastructure/file-raw-store.js";
-import { HttpFileDownloader } from "./infrastructure/http-file-downloader.js";
-import { JsonWatermarkStore } from "./infrastructure/json-watermark-store.js";
-import { type RetryPolicy, retryingFetch } from "./infrastructure/retrying-fetch.js";
-import { latestRunDir } from "./infrastructure/run-directories.js";
-import { SocrataPermitSource } from "./infrastructure/socrata-permit-source.js";
-import { TcadExportCatalogPage } from "./infrastructure/tcad-export-catalog-page.js";
-import { UnzipMemberExtractor } from "./infrastructure/unzip-member-extractor.js";
 
-const USER_AGENT =
-  "travis-oracle-pipeline/0.1 (+https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx)";
-const AUSTIN_OPEN_DATA_URL = "https://data.austintexas.gov";
-const AUSTIN_PERMITS_DATASET_ID = "3syk-w9eu";
-const TCAD_PUBLIC_INFORMATION_URL = "https://traviscad.org/publicinformation";
-const TCAD_PARCELS_LAYER_URL =
-  "https://services.arcgis.com/0L95CJ0VTaxqcmED/arcgis/rest/services/EXTERNAL_tcad_parcel/FeatureServer/0";
-const TCAD_PARCELS_OBJECT_ID = "OBJECTID_1";
-const TCAD_PARCELS_FIELDS = [TCAD_PARCELS_OBJECT_ID, "PROP_ID", "PID_10", "SITUS", "Shape__Area"];
-const ARCGIS_PAGE_SIZE = 2_000;
-const SOCRATA_PAGE_SIZE = 50_000;
-const RETRY_POLICY: RetryPolicy = {
-  maxAttempts: 5,
-  baseDelayMs: 2_000,
-  maxDelayMs: 120_000,
-  attemptTimeoutMs: 300_000,
-};
 const DEFAULT_LOOKBACK_DAYS = 7;
 const DEFAULT_DATA_DIR = "data";
-const STATE_DIR = "state";
-const WORK_DIR = "work";
-const BUILD_DIR = "build";
-const BUILD_RESULT_FILE = "build.json";
-const INGEST_COMMAND = "ingest";
-const BUILD_COMMAND = "build";
+
+enum Command {
+  Ingest = "ingest",
+  Build = "build",
+  Publish = "publish",
+}
+
 const USAGE = [
   "usage: cli ingest austin-permits [--since YYYY-MM-DD] [--lookback-days N] [--data-dir DIR] [--run-id ID]",
   "       cli ingest tcad-appraisal-export [--data-dir DIR] [--run-id ID]",
   "       cli ingest tcad-parcels [--data-dir DIR] [--run-id ID]",
   "       cli build [--as-of YYYY-MM-DD] [--data-dir DIR] [--run-id ID]",
+  "       cli publish [--run-id BUILD_ID] [--dry-run] [--data-dir DIR]",
 ].join("\n");
 
 async function main(argv: string[]): Promise<unknown> {
@@ -65,109 +32,29 @@ async function main(argv: string[]): Promise<unknown> {
       "data-dir": { type: "string", default: DEFAULT_DATA_DIR },
       "run-id": { type: "string" },
       "as-of": { type: "string" },
+      "dry-run": { type: "boolean", default: false },
     },
   });
 
-  const [command, sourceArg] = positionals;
+  const [command, source] = positionals;
   const dataDir = values["data-dir"];
   const runId = values["run-id"] ?? runIdAt(new Date());
-  if (command === BUILD_COMMAND) {
-    return build(dataDir, runId, values["as-of"] ?? isoDateOf(new Date().toISOString()));
-  }
-  if (command !== INGEST_COMMAND) throw new Error(USAGE);
 
-  const watermarks = new JsonWatermarkStore(join(dataDir, STATE_DIR));
-  const resilientFetch = retryingFetch(fetch, RETRY_POLICY, (milliseconds) => delay(milliseconds));
-  const now = () => new Date();
-
-  switch (sourceArg) {
-    case SourceId.AustinPermits: {
-      const window: IngestWindow | undefined =
-        values.since === undefined ? undefined : { kind: WindowKind.Since, since: values.since };
-      return ingestSource(
-        {
-          source: new SocrataPermitSource({
-            baseUrl: AUSTIN_OPEN_DATA_URL,
-            datasetId: AUSTIN_PERMITS_DATASET_ID,
-            pageSize: SOCRATA_PAGE_SIZE,
-            userAgent: USER_AGENT,
-            fetch: resilientFetch,
-            now,
-          }),
-          rawStore: new FileRawStore(dataDir),
-          watermarks,
-        },
-        { runId, lookbackDays: Number(values["lookback-days"]), ...(window && { window }) },
-      );
-    }
-    case SourceId.TcadAppraisalExport:
-      return ingestTcadExport(
-        {
-          catalog: new TcadExportCatalogPage({
-            pageUrl: TCAD_PUBLIC_INFORMATION_URL,
-            userAgent: USER_AGENT,
-            fetch: resilientFetch,
-          }),
-          downloader: new HttpFileDownloader({ userAgent: USER_AGENT, fetch: resilientFetch, now }),
-          transformer: new DuckDbFixedWidthTransformer(
-            new UnzipMemberExtractor(),
-            join(dataDir, WORK_DIR),
-          ),
-          watermarks,
-          paths: new FileArtifactPaths(dataDir),
-        },
-        { runId },
-      );
-    case SourceId.TcadParcels:
-      return ingestSnapshot(
-        {
-          layer: new ArcGisParcelLayer({
-            layerUrl: TCAD_PARCELS_LAYER_URL,
-            objectIdField: TCAD_PARCELS_OBJECT_ID,
-            outFields: TCAD_PARCELS_FIELDS,
-            pageSize: ARCGIS_PAGE_SIZE,
-            userAgent: USER_AGENT,
-            fetch: resilientFetch,
-            now,
-          }),
-          rawStore: new FileRawStore(dataDir),
-          watermarks,
-        },
-        { runId },
-      );
+  switch (command) {
+    case Command.Ingest:
+      if (!isSourceId(source)) throw new Error(USAGE);
+      return runIngest(source, {
+        dataDir,
+        runId,
+        lookbackDays: Number(values["lookback-days"]),
+        since: values.since,
+      });
+    case Command.Build:
+      return runBuild(dataDir, runId, values["as-of"] ?? isoDateOf(new Date().toISOString()));
+    case Command.Publish:
+      return runPublish(dataDir, values["run-id"], values["dry-run"]);
     default:
       throw new Error(USAGE);
-  }
-}
-
-async function build(dataDir: string, buildId: string, asOf: string): Promise<BuildResult> {
-  const appraisalTablesDir = await latestRunDir(
-    join(dataDir, TABLES_DIR, SourceId.TcadAppraisalExport),
-  );
-  const parcelRun = await latestRunDir(join(dataDir, RAW_DIR, SourceId.TcadParcels));
-  if (appraisalTablesDir === undefined || parcelRun === undefined) {
-    throw new Error("build needs an ingested TCAD appraisal export and a TCAD parcel snapshot");
-  }
-
-  const buildsDir = join(dataDir, BUILD_DIR);
-  const outputDir = join(buildsDir, buildId);
-  const warehouse = await DuckDbLeadWarehouse.open();
-  try {
-    const result = await buildLeadTables(warehouse, {
-      buildId,
-      asOf,
-      inputs: {
-        permitPages: join(dataDir, RAW_DIR, SourceId.AustinPermits, "*", RAW_PAGE_GLOB),
-        appraisalTablesDir,
-        parcelPages: join(parcelRun, RAW_PAGE_GLOB),
-      },
-      outputDir,
-      previousDir: await latestRunDir(buildsDir, buildId),
-    });
-    await writeFile(join(outputDir, BUILD_RESULT_FILE), `${JSON.stringify(result, null, 2)}\n`);
-    return result;
-  } finally {
-    warehouse.close();
   }
 }
 

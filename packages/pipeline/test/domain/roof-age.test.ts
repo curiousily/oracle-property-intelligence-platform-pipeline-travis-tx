@@ -102,6 +102,28 @@ describe("estimateRoofAge", () => {
     expect(estimate?.anchor).toBe(RoofAnchor.NewConstruction);
   });
 
+  it("breaks ties the same way whatever order the permits arrive in", () => {
+    const sameDay = [
+      permit(RoofWork.Replacement, PermitState.Completed, "2015-06-01", "2015-000200 BP"),
+      permit(RoofWork.NewConstruction, PermitState.Completed, "2015-06-01", "2015-000100 BP"),
+      permit(RoofWork.Replacement, PermitState.Completed, "2015-06-01", "2015-000150 BP"),
+    ];
+
+    const forwards = estimateRoofAge({ asOf: AS_OF, yearBuilt: 1990, permits: sameDay });
+    const backwards = estimateRoofAge({
+      asOf: AS_OF,
+      yearBuilt: 1990,
+      permits: [...sameDay].reverse(),
+    });
+
+    expect(forwards).toEqual(backwards);
+    expect(forwards).toMatchObject({
+      anchor: RoofAnchor.CompletedReplacement,
+      anchorPermitNumber: "2015-000150 BP",
+      confidence: Confidence.High,
+    });
+  });
+
   it("ignores impossible dates and years", () => {
     const estimate = estimateRoofAge({
       asOf: AS_OF,

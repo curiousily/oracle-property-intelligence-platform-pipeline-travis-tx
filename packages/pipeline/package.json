@@ -5,10 +5,18 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "cli": "tsx src/cli.ts",
     "ingest": "tsx src/cli.ts ingest",
-    "build-leads": "tsx src/cli.ts build"
+    "build-leads": "tsx src/cli.ts build",
+    "publish": "tsx src/cli.ts publish"
   },
   "dependencies": {
-    "@duckdb/node-api": "^2.0.0-r.1"
+    "@duckdb/node-api": "^2.0.0-r.1",
+    "@ipld/car": "^5.4.7",
+    "@ipld/dag-pb": "^4.2.0",
+    "@ipld/unixfs": "^3.0.0",
+    "aws4fetch": "^1.0.20",
+    "ipfs-car": "^3.1.0",
+    "multiformats": "^14.0.5"
   }
 }

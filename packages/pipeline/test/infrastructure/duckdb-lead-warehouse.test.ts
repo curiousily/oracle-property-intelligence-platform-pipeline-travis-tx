@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -151,7 +152,9 @@ async function writeAppraisalTables(dir: string) {
     `SELECT * FROM (VALUES
       (100008::BIGINT, 1::BIGINT, 'Roof Covering', 'COMPOSITIO'),
       (100008, 1, 'Roof Style', 'HIP'),
-      (100008, 2, 'Roof Covering', 'METAL')
+      (100008, 2, 'Roof Covering', 'METAL'),
+      (100012, 3, 'Roof Covering', 'METAL'),
+      (100012, 3, 'Roof Covering', 'COMPOSITIO')
     ) AS t(prop_id, imprv_id, imprv_attr_desc, imprv_attr_cd)`,
   );
 }
@@ -289,6 +292,7 @@ describe("DuckDbLeadWarehouse", () => {
       source_run_id: APPRAISAL_RUN,
     });
     expect(properties[1]).toMatchObject({
+      roof_covering: "COMPOSITIO",
       owner_locality: "local",
       ownership_years: null,
       roof_age_anchor: "new_construction",
@@ -312,6 +316,39 @@ describe("DuckDbLeadWarehouse", () => {
     );
   });
 
+  it("writes a coverage report with fill rates for the fields leads depend on", async () => {
+    const coverage = JSON.parse(
+      await readFile(join(dataDir, "build", "build-1", "coverage.json"), "utf8"),
+    );
+
+    expect(coverage.properties).toMatchObject({
+      rows: 4,
+      with_coordinates: 2,
+      with_year_built: 2,
+      with_roof_age: 2,
+      roof_age_confidence: { high: 1, medium: 1 },
+      owner_locality: { out_of_state: 1, local: 3 },
+    });
+    expect(coverage.roofing_permits).toMatchObject({
+      rows: 3,
+      unfinished: 2,
+      with_contractor: 2,
+      link_status: { linked: 2, ambiguous_parcel: 1 },
+    });
+  });
+
+  it("writes small CSV extracts of the strongest leads", async () => {
+    const extract = (name: string) =>
+      readFile(join(dataDir, "build", "build-1", "samples", name), "utf8");
+
+    const longOpen = (await extract("long-open-roofing-permits.csv")).trim().split("\n");
+    expect(longOpen[0]).toContain("permit_number");
+    expect(longOpen[1]).toContain("2016-023376 BP");
+    const agedRoofs = (await extract("aged-roofs.csv")).trim().split("\n");
+    expect(agedRoofs).toHaveLength(2);
+    expect(agedRoofs[1]).toContain("100012");
+  });
+
   it("reports every row as added on the first build", () => {
     expect(result.tables).toEqual(
       expect.arrayContaining([
@@ -326,6 +363,18 @@ describe("DuckDbLeadWarehouse", () => {
 
     for (const table of rebuilt.tables) {
       expect(table).toMatchObject({ added: 0, changed: 0, removed: 0 });
+    }
+  });
+
+  it("writes byte-identical tables from the same inputs, so unchanged tables keep their CIDs", async () => {
+    await build("build-3", "build-1");
+
+    for (const table of ["permits", "roofing_permits", "properties", "contractors"]) {
+      const digest = async (buildId: string) =>
+        createHash("sha256")
+          .update(await readFile(join(dataDir, "build", buildId, `${table}.parquet`)))
+          .digest("hex");
+      expect(await digest("build-3")).toBe(await digest("build-1"));
     }
   });
 });

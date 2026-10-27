@@ -1,4 +1,4 @@
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { type DuckDBAppender, type DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import type {
@@ -14,8 +14,14 @@ import type {
   PropertyRoofEvidence,
   TableSummary,
 } from "../application/lead-build-ports.js";
+import {
+  AGED_ROOF_YEARS,
+  LONG_OPEN_PERMIT_YEARS,
+  LONG_OWNERSHIP_YEARS,
+} from "../domain/lead-thresholds.js";
 import { PermitLinkStatus } from "../domain/permit-link.js";
 import type { PermitState } from "../domain/permit-state.js";
+import { Confidence } from "../domain/roof-age.js";
 import { ROOF_AGE_EVIDENCE, ROOFING_WORK, type RoofWork } from "../domain/roof-work.js";
 import { SourceId } from "../domain/source-id.js";
 import {
@@ -32,6 +38,14 @@ const BUILDING_PERMIT = "BP";
 const CANDIDATE_WORK_CLASSES = ["new", "roof"];
 const RAW_RUN_ID = String.raw`/(\d{8}T\d{6}Z)/page-`;
 const ISO_DATE = "%Y-%m-%d";
+const COVERAGE_FILE = "coverage.json";
+const SAMPLES_DIR = "samples";
+const LONG_OPEN_SAMPLE_FILE = "long-open-roofing-permits.csv";
+const AGED_ROOFS_SAMPLE_FILE = "aged-roofs.csv";
+const SAMPLE_ROWS = 100;
+const CONFIDENCE_ORDER = [Confidence.High, Confidence.Medium, Confidence.Low]
+  .map((confidence, rank) => `WHEN '${confidence}' THEN ${rank}`)
+  .join(" ");
 const WHOLE_RAW_PAGE_JSON_BUFFER_BYTES = 134_217_728;
 const WAREHOUSE_CONFIG = { memory_limit: "8GB", preserve_insertion_order: "false" };
 
@@ -135,11 +149,11 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         SELECT * FROM read_parquet(${tcad(TcadTable.Properties)})
         WHERE prop_type_cd IN (${list(TCAD_REAL_PROPERTY_TYPES)});
       CREATE TABLE tcad_owners AS
-        SELECT prop_id, list(py_owner_name ORDER BY py_owner_id) AS owner_names, count(*) AS owner_count
+        SELECT prop_id, list(py_owner_name ORDER BY py_owner_id, py_owner_name) AS owner_names, count(*) AS owner_count
         FROM tcad_property_rows GROUP BY prop_id;
       CREATE TABLE tcad_properties AS
         SELECT * FROM tcad_property_rows
-        QUALIFY row_number() OVER (PARTITION BY prop_id ORDER BY py_owner_id) = 1;
+        QUALIFY row_number() OVER (PARTITION BY prop_id ORDER BY py_owner_id, py_owner_name) = 1;
       CREATE TABLE tcad_improvements AS SELECT * FROM read_parquet(${tcad(TcadTable.Improvements)});
       CREATE TABLE tcad_improvement_details AS
         SELECT * FROM read_parquet(${tcad(TcadTable.ImprovementDetails)})
@@ -154,14 +168,18 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         FROM read_json(${literal(parcelPages)}, columns = {'features': '${PARCEL_FEATURES}'})
       )
       SELECT feature.attributes.PROP_ID AS prop_id,
-        arg_max(feature.centroid.y, feature.attributes.Shape__Area) AS latitude,
-        arg_max(feature.centroid.x, feature.attributes.Shape__Area) AS longitude
+        feature.centroid.y AS latitude,
+        feature.centroid.x AS longitude
       FROM features
       WHERE feature.attributes.PROP_ID IS NOT NULL AND feature.centroid IS NOT NULL
-      GROUP BY 1;
+      QUALIFY row_number() OVER (
+        PARTITION BY feature.attributes.PROP_ID
+        ORDER BY feature.attributes.Shape__Area DESC NULLS LAST, feature.centroid.y, feature.centroid.x
+      ) = 1;
 
       CREATE TABLE main_improvement AS
-        SELECT prop_id, arg_max(imprv_id, imprv_val) AS imprv_id FROM tcad_improvements GROUP BY prop_id;
+        SELECT prop_id, imprv_id FROM tcad_improvements
+        QUALIFY row_number() OVER (PARTITION BY prop_id ORDER BY imprv_val DESC NULLS LAST, imprv_id) = 1;
 
       CREATE TABLE property_year_built AS
       WITH main_floor AS (
@@ -247,7 +265,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
           'work': w.roof_work,
           'state': w.permit_state,
           'completedDate': ${isoDate("p.completed_date")}
-        }) AS permits
+        } ORDER BY w.permit_number) AS permits
         FROM permit_roof_work w
         JOIN permit_links l USING (permit_number)
         JOIN permits p USING (permit_number)
@@ -365,11 +383,18 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       WHERE w.roof_work IN (${list(ROOFING_WORK)});
 
       CREATE OR REPLACE VIEW export_properties AS
-      WITH roof_attributes AS (
-        SELECT a.prop_id,
-          mode(a.imprv_attr_cd) FILTER (WHERE a.imprv_attr_desc = ${literal(TCAD_ROOF_COVERING_ATTRIBUTE)}) AS roof_covering,
-          mode(a.imprv_attr_cd) FILTER (WHERE a.imprv_attr_desc = ${literal(TCAD_ROOF_STYLE_ATTRIBUTE)}) AS roof_style
+      WITH attribute_counts AS (
+        SELECT a.prop_id, a.imprv_attr_desc, a.imprv_attr_cd, count(*) AS occurrences
         FROM tcad_roof_attributes a JOIN main_improvement m USING (prop_id, imprv_id)
+        WHERE a.imprv_attr_cd IS NOT NULL
+        GROUP BY 1, 2, 3
+      ), roof_attributes AS (
+        SELECT prop_id,
+          first(imprv_attr_cd ORDER BY occurrences DESC, imprv_attr_cd)
+            FILTER (WHERE imprv_attr_desc = ${literal(TCAD_ROOF_COVERING_ATTRIBUTE)}) AS roof_covering,
+          first(imprv_attr_cd ORDER BY occurrences DESC, imprv_attr_cd)
+            FILTER (WHERE imprv_attr_desc = ${literal(TCAD_ROOF_STYLE_ATTRIBUTE)}) AS roof_style
+        FROM attribute_counts
         GROUP BY 1
       ), roofing AS (
         SELECT prop_id, count(*) AS roofing_permits,
@@ -424,7 +449,75 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     for (const table of Object.values(ExportTable)) {
       summaries.push(await this.exportTable(table, outputDir, previousDir));
     }
+    await this.exportCoverage(outputDir);
+    await this.exportSamples(outputDir);
     return summaries;
+  }
+
+  private async exportCoverage(outputDir: string): Promise<void> {
+    const [properties] = await this.rows(`
+      SELECT count(*) AS rows, count(latitude) AS with_coordinates, count(year_built) AS with_year_built,
+        count(roof_age_years) AS with_roof_age, count(roof_covering) AS with_roof_covering,
+        count(*) FILTER (WHERE roof_age_years > ${AGED_ROOF_YEARS}) AS roof_older_than_${AGED_ROOF_YEARS}_years,
+        count(*) FILTER (WHERE ownership_years > ${LONG_OWNERSHIP_YEARS}) AS owned_longer_than_${LONG_OWNERSHIP_YEARS}_years
+      FROM export_properties`);
+    const [roofing] = await this.rows(`
+      SELECT count(*) AS rows, count(*) FILTER (WHERE unfinished) AS unfinished,
+        count(*) FILTER (WHERE unfinished AND years_open >= ${LONG_OPEN_PERMIT_YEARS}) AS open_${LONG_OPEN_PERMIT_YEARS}_years_or_more,
+        count(contractor_name) AS with_contractor, count(latitude) AS with_coordinates
+      FROM export_roofing_permits`);
+    const [permits] = await this.rows(
+      "SELECT count(*) AS rows, count(geo_id) AS with_parcel_id FROM export_permits",
+    );
+    const coverage = {
+      properties: {
+        ...numbers(properties),
+        roof_age_confidence: await this.histogram("export_properties", "roof_age_confidence"),
+        owner_locality: await this.histogram("export_properties", "owner_locality"),
+      },
+      roofing_permits: {
+        ...numbers(roofing),
+        roof_work: await this.histogram("export_roofing_permits", "roof_work"),
+        permit_state: await this.histogram("export_roofing_permits", "permit_state"),
+        link_status: await this.histogram("export_roofing_permits", "link_status"),
+      },
+      permits: {
+        ...numbers(permits),
+        link_status: await this.histogram("export_permits", "link_status"),
+      },
+      contractors: { rows: await this.count("export_contractors") },
+    };
+    await writeFile(join(outputDir, COVERAGE_FILE), `${JSON.stringify(coverage, null, 2)}\n`);
+  }
+
+  private async exportSamples(outputDir: string): Promise<void> {
+    const samplesDir = join(outputDir, SAMPLES_DIR);
+    await mkdir(samplesDir, { recursive: true });
+    await this.connection.run(`
+      COPY (
+        SELECT permit_number, address, permit_state, roof_work, open_since, years_open, past_expiry,
+          contractor_name, contractor_phone, latitude, longitude, source_url
+        FROM export_roofing_permits
+        WHERE unfinished
+        ORDER BY years_open DESC NULLS LAST, permit_number
+        LIMIT ${SAMPLE_ROWS}
+      ) TO ${literal(join(samplesDir, LONG_OPEN_SAMPLE_FILE))} (HEADER, DELIMITER ',');
+      COPY (
+        SELECT prop_id, situs_address, situs_zip, year_built, roof_covering, roof_style, roof_age_years,
+          roof_age_anchor, roof_age_anchor_date, roof_age_confidence, latitude, longitude
+        FROM export_properties
+        WHERE roof_age_years > ${AGED_ROOF_YEARS}
+        ORDER BY CASE roof_age_confidence ${CONFIDENCE_ORDER} END, roof_age_years DESC, prop_id
+        LIMIT ${SAMPLE_ROWS}
+      ) TO ${literal(join(samplesDir, AGED_ROOFS_SAMPLE_FILE))} (HEADER, DELIMITER ',');
+    `);
+  }
+
+  private async histogram(relation: string, column: string): Promise<Record<string, number>> {
+    const rows = await this.rows(
+      `SELECT ${column} AS key, count(*) AS n FROM ${relation} WHERE ${column} IS NOT NULL GROUP BY 1 ORDER BY 1`,
+    );
+    return Object.fromEntries(rows.map((row) => [String(row.key), Number(row.n)]));
   }
 
   private async exportTable(
@@ -529,4 +622,8 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function numbers(row: Row | undefined): Record<string, number> {
+  return Object.fromEntries(Object.entries(row ?? {}).map(([key, value]) => [key, Number(value)]));
 }

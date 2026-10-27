@@ -83,8 +83,21 @@ export function estimateRoofAge({
   }
 
   return candidates.reduce<Candidate | undefined>(
-    (latest, candidate) =>
-      latest === undefined || candidate.sortKey > latest.sortKey ? candidate : latest,
+    (best, candidate) => (best === undefined || outranks(candidate, best) ? candidate : best),
     undefined,
   )?.estimate;
+}
+
+const CONFIDENCE_RANK: Record<Confidence, number> = {
+  [Confidence.High]: 3,
+  [Confidence.Medium]: 2,
+  [Confidence.Low]: 1,
+};
+
+function outranks(candidate: Candidate, best: Candidate): boolean {
+  if (candidate.sortKey !== best.sortKey) return candidate.sortKey > best.sortKey;
+  const rankDifference =
+    CONFIDENCE_RANK[candidate.estimate.confidence] - CONFIDENCE_RANK[best.estimate.confidence];
+  if (rankDifference !== 0) return rankDifference > 0;
+  return (candidate.estimate.anchorPermitNumber ?? "") < (best.estimate.anchorPermitNumber ?? "");
 }
