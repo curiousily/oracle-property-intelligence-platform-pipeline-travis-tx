@@ -33,6 +33,7 @@ import { PermitLinkStatus } from "../domain/permit-link.js";
 import { PermitState } from "../domain/permit-state.js";
 import { ROOF_AGE_EVIDENCE, ROOFING_WORK, type RoofWork } from "../domain/roof-work.js";
 import { SourceId } from "../domain/source-id.js";
+import { DAMAGING_HAIL_INCHES } from "../domain/storm-events.js";
 import { MAX_ADDRESS_POINT_SPREAD_DEGREES, STREET_TYPE_ALIASES } from "../domain/street-address.js";
 import {
   TCAD_MAIN_FLOOR_DETAIL,
@@ -47,6 +48,7 @@ import {
   INSIDE_CITY_LIMITS,
   TRAVIS_COUNTY_COMPTROLLER_CODE,
 } from "../domain/texas-registry.js";
+import { TRAVIS_COUNTY_BOUNDS } from "../domain/travis-county.js";
 
 type Row = Record<string, unknown>;
 
@@ -77,6 +79,7 @@ enum ExportTable {
   Properties = "properties",
   Contractors = "contractors",
   Businesses = "businesses",
+  HailEvents = "hail_events",
 }
 
 const EXPORT_KEYS: Record<ExportTable, string> = {
@@ -85,6 +88,7 @@ const EXPORT_KEYS: Record<ExportTable, string> = {
   [ExportTable.Properties]: "prop_id",
   [ExportTable.Contractors]: "contractor_key",
   [ExportTable.Businesses]: "business_id",
+  [ExportTable.HailEvents]: "event_id",
 };
 
 const PERMIT_COLUMNS = {
@@ -156,8 +160,24 @@ const LICENSE_COLUMNS = columnsOf(
   "business_telephone",
 );
 
+const HAIL_REPORT_COLUMNS = {
+  ...columnsOf(
+    "event_id",
+    "episode_id",
+    "event_date",
+    "begin_time",
+    "timezone",
+    "county",
+    "location",
+    "report_source",
+  ),
+  magnitude_inches: "DOUBLE",
+  latitude: "DOUBLE",
+  longitude: "DOUBLE",
+};
+const NCEI_EVENT_URL = "https://www.ncei.noaa.gov/access/storm-events-database/?id=";
+
 const COORDINATE_DECIMALS = 7;
-const TRAVIS_COUNTY_BOUNDS = { south: 29.9, north: 30.7, west: -98.3, east: -97.3 };
 const ADDRESS_POINT_FEATURES =
   "STRUCT(attributes STRUCT(ADDRESS BIGINT, PREFIX_DIRECTION VARCHAR, STREET_NAME VARCHAR, STREET_TYPE VARCHAR), geometry STRUCT(x DOUBLE, y DOUBLE))[]";
 const BBB_PROFILE =
@@ -188,6 +208,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     salesTaxPages,
     franchisePages,
     licensePages,
+    hailPages,
   }: BuildInputs) {
     this.appraisalRunId = basename(appraisalTablesDir);
     const tcad = (table: TcadTable) => literal(join(appraisalTablesDir, `${table}.parquet`));
@@ -285,6 +306,12 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     await this.loadCoordinates(addressPointPages);
     await this.loadBbbProfiles(bbbProfiles);
     await this.loadRegistries(salesTaxPages, franchisePages, licensePages);
+    await this.connection.run(`
+      CREATE TABLE hail_reports AS
+      SELECT * FROM (${snapshotRows(hailPages, HAIL_REPORT_COLUMNS)})
+      WHERE event_id IS NOT NULL
+      QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY source_run_id DESC) = 1;
+    `);
 
     return {
       permits: await this.count("permits"),
@@ -295,6 +322,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       salesTaxOutlets: await this.count("sales_tax_outlets"),
       franchiseTaxpayers: await this.count("franchise_taxpayers"),
       contractorLicenses: await this.count("contractor_licenses"),
+      hailReports: await this.count("hail_reports"),
     };
   }
 
@@ -810,6 +838,13 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       LEFT JOIN sales_taxpayers sales ON sales.taxpayer_number = registry.taxpayer_number
       LEFT JOIN licenses USING (contractor_key);
 
+      CREATE OR REPLACE VIEW export_hail_events AS
+      SELECT event_id, episode_id, CAST(event_date AS DATE) AS event_date, begin_time, timezone, county,
+        magnitude_inches, latitude, longitude, location, report_source,
+        ${literal(NCEI_EVENT_URL)} || event_id AS source_url,
+        ${literal(SourceId.NoaaStormEvents)} AS source, source_run_id
+      FROM hail_reports;
+
       CREATE OR REPLACE VIEW export_businesses AS
       WITH situs AS (
         SELECT keys.address_key, left(p.situs_zip, ${ZIP_LENGTH}) AS zip, keys.prop_id
@@ -900,6 +935,14 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         registry_match_method: await this.histogram("export_contractors", "registry_match_method"),
         with_license: await this.countWhere("export_contractors", "license_types IS NOT NULL"),
         license_match_method: await this.histogram("export_contractors", "license_match_method"),
+      },
+      hail_events: {
+        rows: await this.count("export_hail_events"),
+        one_inch_or_larger: await this.countWhere(
+          "export_hail_events",
+          `magnitude_inches >= ${DAMAGING_HAIL_INCHES}`,
+        ),
+        by_year: await this.histogram("export_hail_events", "year(event_date)"),
       },
       businesses: {
         rows: await this.count("export_businesses"),

@@ -50,6 +50,7 @@ export async function runBuild(
     salesTaxPages: await snapshotPages(SourceId.TxSalesTaxPermits),
     franchisePages: await snapshotPages(SourceId.TxFranchiseTaxpayers),
     licensePages: await snapshotPages(SourceId.TdlrLicenses),
+    hailPages: await snapshotPages(SourceId.NoaaStormEvents),
   };
 
   const warehouse = await DuckDbLeadWarehouse.open();

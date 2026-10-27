@@ -15,6 +15,7 @@ export interface BuildInputs {
   salesTaxPages?: string;
   franchisePages?: string;
   licensePages?: string;
+  hailPages?: string;
 }
 
 export interface PermitCandidate extends PermitFacts, PermitDates {

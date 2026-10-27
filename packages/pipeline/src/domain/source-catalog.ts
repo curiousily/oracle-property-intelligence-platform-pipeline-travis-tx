@@ -148,4 +148,21 @@ export const SOURCE_CATALOG: readonly SourceDescription[] = [
       "Only contractor licenses are kept (electrical, air conditioning, appliance, sign and elevator contractors); a business's licenses are matched together by phone and normalized name.",
     ],
   },
+  {
+    id: SourceId.NoaaStormEvents,
+    name: "Storm Events Database: hail reports around Travis County",
+    publisher: "NOAA National Centers for Environmental Information (NCEI)",
+    url: "https://www.ncei.noaa.gov/stormevents/",
+    provides: [
+      "every hail report in and around Travis County since 2000: date, hail size in inches, location and who reported it",
+      "the hail signal for leads: a damaging hail report near a property after its roof was last put on",
+    ],
+    refresh:
+      "Lists NCEI's yearly event files and downloads them again only when NCEI republishes one, keeping only the hail reports in the Travis County area.",
+    limitations: [
+      "Reports come from spotters, the public and officials; hail nobody reported is missing, so no report does not mean no hail.",
+      "A report marks where hail was observed, rounded to about a kilometer, not the full footprint of the storm.",
+      "NCEI publishes each month's reports about three months after the month ends, so the latest months are not in the data yet.",
+    ],
+  },
 ];

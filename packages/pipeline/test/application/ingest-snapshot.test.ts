@@ -85,6 +85,30 @@ describe("ingestSnapshot", () => {
     expect(await watermarks.read(SourceId.TcadParcels)).toBe(VERSION);
   });
 
+  it("keeps paging past a page without records until the layer's last page", async () => {
+    const layer = new ScriptedLayer([page(0, "2000", false), page(3, "2001", true)]);
+
+    const result = await ingestSnapshot(
+      { layer, rawStore: new MemoryRawStore(), watermarks: new MemoryWatermarks() },
+      { runId: RUN_ID },
+    );
+
+    expect(layer.afterKeys).toEqual([undefined, "2000"]);
+    expect(result).toMatchObject({ pages: 2, records: 3 });
+  });
+
+  it("stops when a page makes no progress", async () => {
+    const layer = new ScriptedLayer([page(5, "2000", false), page(0, "2000", false)]);
+
+    const result = await ingestSnapshot(
+      { layer, rawStore: new MemoryRawStore(), watermarks: new MemoryWatermarks() },
+      { runId: RUN_ID },
+    );
+
+    expect(layer.afterKeys).toEqual([undefined, "2000"]);
+    expect(result).toMatchObject({ status: IngestStatus.Ingested, pages: 2, records: 5 });
+  });
+
   it("skips a layer version it has already ingested", async () => {
     const layer = new ScriptedLayer([]);
     const watermarks = new MemoryWatermarks(new Map([[SourceId.TcadParcels, VERSION]]));

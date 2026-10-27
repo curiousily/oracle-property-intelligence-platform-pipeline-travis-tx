@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: ${{ fromJSON(inputs.sources || '["austin-permits", "tcad-appraisal-export", "tcad-parcels", "travis-address-points", "bbb-archive", "tx-sales-tax-permits", "tx-franchise-taxpayers", "tdlr-licenses"]') }}
+        source: ${{ fromJSON(inputs.sources || '["austin-permits", "tcad-appraisal-export", "tcad-parcels", "travis-address-points", "bbb-archive", "tx-sales-tax-permits", "tx-franchise-taxpayers", "tdlr-licenses", "noaa-storm-events"]') }}
     env:
       SOURCE: ${{ matrix.source }}
     steps:
@@ -134,7 +134,7 @@ jobs:
           fetch raw/bbb-archive
           fetch "tables/tcad-appraisal-export/$(latest_run tables/tcad-appraisal-export)"
           fetch "raw/tcad-parcels/$(latest_run raw/tcad-parcels)"
-          for snapshot in travis-address-points tx-sales-tax-permits tx-franchise-taxpayers tdlr-licenses; do
+          for snapshot in travis-address-points tx-sales-tax-permits tx-franchise-taxpayers tdlr-licenses noaa-storm-events; do
             run="$(latest_run "raw/$snapshot")"
             if [ -n "$run" ]; then fetch "raw/$snapshot/$run"; fi
           done

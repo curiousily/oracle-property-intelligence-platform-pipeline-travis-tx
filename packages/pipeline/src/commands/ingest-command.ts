@@ -6,7 +6,9 @@ import { ingestSource } from "../application/ingest-source.js";
 import { ingestTcadExport } from "../application/ingest-tcad-export.js";
 import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { SourceId } from "../domain/source-id.js";
+import { FIRST_HAIL_YEAR } from "../domain/storm-events.js";
 import { TRAVIS_COUNTY_COMPTROLLER_CODE } from "../domain/texas-registry.js";
+import { TRAVIS_COUNTY_BOUNDS } from "../domain/travis-county.js";
 import { ArcGisFeatureLayer, FeatureGeometry } from "../infrastructure/arcgis-feature-layer.js";
 import { BbbStateParser } from "../infrastructure/bbb-state-parser.js";
 import { contractorKeysOf } from "../infrastructure/build-tables.js";
@@ -19,6 +21,7 @@ import {
   loadArchivedSnapshots,
   NdjsonBbbArchiveStore,
 } from "../infrastructure/ndjson-bbb-archive-store.js";
+import { NoaaStormEvents } from "../infrastructure/noaa-storm-events.js";
 import { latestRunDir } from "../infrastructure/run-directories.js";
 import { SocrataPermitSource } from "../infrastructure/socrata-permit-source.js";
 import { SocrataSnapshotDataset } from "../infrastructure/socrata-snapshot-dataset.js";
@@ -56,6 +59,7 @@ const BBB_CATEGORIES = [
   "home-builders",
   "siding-contractors",
 ];
+const NOAA_STORM_EVENTS_URL = "https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/";
 const TEXAS_OPEN_DATA_URL = "https://data.texas.gov";
 const TEXAS_SNAPSHOTS = {
   [SourceId.TxSalesTaxPermits]: {
@@ -227,6 +231,23 @@ export async function runIngest(
             baseUrl: TEXAS_OPEN_DATA_URL,
             ...TEXAS_SNAPSHOTS[source],
             pageSize: SOCRATA_PAGE_SIZE,
+            userAgent: USER_AGENT,
+            fetch: resilientFetch,
+            now,
+          }),
+          rawStore: new FileRawStore(dataDir),
+          watermarks,
+        },
+        { runId },
+      );
+    case SourceId.NoaaStormEvents:
+      return ingestSnapshot(
+        {
+          layer: new NoaaStormEvents({
+            id: source,
+            baseUrl: NOAA_STORM_EVENTS_URL,
+            firstYear: FIRST_HAIL_YEAR,
+            bounds: TRAVIS_COUNTY_BOUNDS,
             userAgent: USER_AGENT,
             fetch: resilientFetch,
             now,

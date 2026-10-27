@@ -7,4 +7,5 @@ export enum SourceId {
   TxSalesTaxPermits = "tx-sales-tax-permits",
   TxFranchiseTaxpayers = "tx-franchise-taxpayers",
   TdlrLicenses = "tdlr-licenses",
+  NoaaStormEvents = "noaa-storm-events",
 }

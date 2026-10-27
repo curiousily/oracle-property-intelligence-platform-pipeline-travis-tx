@@ -44,8 +44,10 @@ export async function ingestSnapshot(
   let pages = 0;
   let records = 0;
   let afterKey: string | undefined;
+  let previousKey: string | undefined;
   let fetched: FetchedPage;
   do {
+    previousKey = afterKey;
     fetched = await layer.fetchPage(afterKey);
     pages += 1;
     records += fetched.recordCount;
@@ -57,7 +59,7 @@ export async function ingestSnapshot(
       receipt: fetched.receipt,
     });
     afterKey = fetched.lastKey;
-  } while (!fetched.isLastPage && fetched.recordCount > 0);
+  } while (!fetched.isLastPage && afterKey !== undefined && afterKey !== previousKey);
 
   await watermarks.write(layer.id, version);
   return { ...run, status: IngestStatus.Ingested, watermark: version, pages, records };

@@ -289,6 +289,36 @@ const TDLR_LICENSES = [
   },
 ];
 
+const hailReport = (fields: Row): Row => ({
+  episode_id: "190001",
+  begin_time: "1840",
+  timezone: "CST-6",
+  county: "TRAVIS",
+  report_source: "Public",
+  ...fields,
+});
+const HAIL_PAGES = [
+  [],
+  [
+    hailReport({
+      event_id: "1181339",
+      event_date: "2024-05-09",
+      magnitude_inches: 1.75,
+      latitude: 30.2601,
+      longitude: -97.7501,
+      location: "AUSTIN",
+    }),
+    hailReport({
+      event_id: "1172071",
+      event_date: "2024-04-09",
+      magnitude_inches: 0.75,
+      latitude: 30.35,
+      longitude: -97.7,
+      location: "MANOR",
+    }),
+  ],
+];
+
 async function writeGzipJson(path: string, value: unknown) {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, gzipSync(JSON.stringify(value)));
@@ -392,7 +422,15 @@ beforeAll(async () => {
     return join(dataDir, "raw", source, REGISTRY_RUN, "page-*.json.gz");
   };
 
+  for (const [index, reports] of HAIL_PAGES.entries()) {
+    await writeGzipJson(
+      join(dataDir, "raw", "noaa-storm-events", REGISTRY_RUN, `page-0000${index + 1}.json.gz`),
+      reports,
+    );
+  }
+
   inputs = {
+    hailPages: join(dataDir, "raw", "noaa-storm-events", REGISTRY_RUN, "page-*.json.gz"),
     salesTaxPages: await registryPages("tx-sales-tax-permits", SALES_TAX_OUTLETS),
     franchisePages: await registryPages("tx-franchise-taxpayers", FRANCHISE_TAXPAYERS),
     licensePages: await registryPages("tdlr-licenses", TDLR_LICENSES),
@@ -416,6 +454,7 @@ describe("DuckDbLeadWarehouse", () => {
       salesTaxOutlets: 5,
       franchiseTaxpayers: 2,
       contractorLicenses: 1,
+      hailReports: 2,
     });
   });
 
@@ -642,6 +681,30 @@ describe("DuckDbLeadWarehouse", () => {
     expect(businesses[2]?.inside_city_limits).toBe(false);
   });
 
+  it("publishes NOAA hail reports with their size, place and a link to the NCEI event", async () => {
+    const hail = await readTable("build-1", "hail_events", "event_id");
+
+    expect(hail).toEqual([
+      expect.objectContaining({ event_id: "1172071", magnitude_inches: 0.75 }),
+      {
+        event_id: "1181339",
+        episode_id: "190001",
+        event_date: "2024-05-09",
+        begin_time: "1840",
+        timezone: "CST-6",
+        county: "TRAVIS",
+        magnitude_inches: 1.75,
+        latitude: 30.2601,
+        longitude: -97.7501,
+        location: "AUSTIN",
+        report_source: "Public",
+        source_url: "https://www.ncei.noaa.gov/access/storm-events-database/?id=1181339",
+        source: "noaa-storm-events",
+        source_run_id: REGISTRY_RUN,
+      },
+    ]);
+  });
+
   it("still builds without the Texas registries", async () => {
     const { salesTaxPages, franchisePages, licensePages, ...withoutRegistries } = inputs;
     const warehouse = await DuckDbLeadWarehouse.open();
@@ -742,6 +805,11 @@ describe("DuckDbLeadWarehouse", () => {
       with_license: 1,
       license_match_method: { name_and_phone: 1 },
     });
+    expect(coverage.hail_events).toEqual({
+      rows: 2,
+      one_inch_or_larger: 1,
+      by_year: { "2024": 2 },
+    });
     expect(coverage.businesses).toMatchObject({
       rows: 5,
       with_property: 3,
@@ -809,7 +877,14 @@ describe("DuckDbLeadWarehouse", () => {
     await build("build-5");
     await build("build-6");
 
-    for (const table of ["permits", "roofing_permits", "properties", "contractors", "businesses"]) {
+    for (const table of [
+      "permits",
+      "roofing_permits",
+      "properties",
+      "contractors",
+      "businesses",
+      "hail_events",
+    ]) {
       const digest = async (buildId: string) =>
         createHash("sha256")
           .update(await readFile(join(dataDir, "build", buildId, `${table}.parquet`)))
