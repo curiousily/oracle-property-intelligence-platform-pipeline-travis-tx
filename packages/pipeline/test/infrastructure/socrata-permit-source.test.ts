@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { WindowKind } from "../../src/domain/ingest-window.js";
 import { SourceId } from "../../src/domain/source-id.js";
-import {
-  SocrataPermitSource,
-  SourceRequestError,
-} from "../../src/infrastructure/socrata-permit-source.js";
+import { SocrataPermitSource } from "../../src/infrastructure/socrata-permit-source.js";
+import { SourceRequestError } from "../../src/infrastructure/source-request-error.js";
 
 const FETCHED_AT = new Date("2026-10-27T06:30:00.000Z");
 const USER_AGENT = "travis-oracle-pipeline/test";

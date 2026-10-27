@@ -50,15 +50,29 @@ describe("FileRawStore", () => {
 describe("JsonWatermarkStore", () => {
   it("has no watermark for a source that was never ingested", async () => {
     expect(
-      await new JsonWatermarkStore(join(dataDir, "state.json")).read(SourceId.AustinPermits),
+      await new JsonWatermarkStore(join(dataDir, "state")).read(SourceId.AustinPermits),
     ).toBeUndefined();
   });
 
   it("persists watermarks across instances", async () => {
-    const path = join(dataDir, "state", "watermarks.json");
+    const stateDir = join(dataDir, "state");
 
-    await new JsonWatermarkStore(path).write(SourceId.AustinPermits, "2026-10-26");
+    await new JsonWatermarkStore(stateDir).write(SourceId.AustinPermits, "2026-10-26");
 
-    expect(await new JsonWatermarkStore(path).read(SourceId.AustinPermits)).toBe("2026-10-26");
+    expect(await new JsonWatermarkStore(stateDir).read(SourceId.AustinPermits)).toBe("2026-10-26");
+  });
+
+  it("keeps each source in its own file so sources can be ingested in parallel", async () => {
+    const stateDir = join(dataDir, "state");
+
+    await new JsonWatermarkStore(stateDir).write(SourceId.AustinPermits, "2026-10-26");
+    await new JsonWatermarkStore(stateDir).write(SourceId.TcadAppraisalExport, "2026-supp-0335");
+
+    expect(JSON.parse(await readFile(join(stateDir, "austin-permits.json"), "utf8"))).toEqual({
+      watermark: "2026-10-26",
+    });
+    expect(
+      JSON.parse(await readFile(join(stateDir, "tcad-appraisal-export.json"), "utf8")),
+    ).toEqual({ watermark: "2026-supp-0335" });
   });
 });

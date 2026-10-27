@@ -1,32 +1,35 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { join } from "node:path";
 import type { WatermarkStore } from "../application/ports.js";
 import type { SourceId } from "../domain/source-id.js";
 
 const MISSING_FILE = "ENOENT";
+const JSON_EXTENSION = ".json";
 
-type Watermarks = Partial<Record<SourceId, string>>;
+interface SourceState {
+  watermark: string;
+}
 
 export class JsonWatermarkStore implements WatermarkStore {
-  constructor(private readonly path: string) {}
+  constructor(private readonly stateDir: string) {}
 
   async read(source: SourceId): Promise<string | undefined> {
-    return (await this.readAll())[source];
+    try {
+      const state = JSON.parse(await readFile(this.pathOf(source), "utf8")) as SourceState;
+      return state.watermark;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === MISSING_FILE) return undefined;
+      throw error;
+    }
   }
 
   async write(source: SourceId, watermark: string): Promise<void> {
-    const watermarks = await this.readAll();
-    watermarks[source] = watermark;
-    await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, `${JSON.stringify(watermarks, null, 2)}\n`);
+    await mkdir(this.stateDir, { recursive: true });
+    const state: SourceState = { watermark };
+    await writeFile(this.pathOf(source), `${JSON.stringify(state, null, 2)}\n`);
   }
 
-  private async readAll(): Promise<Watermarks> {
-    try {
-      return JSON.parse(await readFile(this.path, "utf8")) as Watermarks;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === MISSING_FILE) return {};
-      throw error;
-    }
+  private pathOf(source: SourceId): string {
+    return join(this.stateDir, `${source}${JSON_EXTENSION}`);
   }
 }

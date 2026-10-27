@@ -4,6 +4,7 @@ import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { isoDateOf } from "../domain/iso-date.js";
 import { SourceId } from "../domain/source-id.js";
 import { laterWatermark } from "../domain/watermark.js";
+import { SourceRequestError } from "./source-request-error.js";
 
 const KEY_FIELD = "permit_number";
 const STATUS_DATE_FIELD = "statusdate";
@@ -18,16 +19,6 @@ export interface SocrataPermitSourceConfig {
   userAgent: string;
   fetch: typeof fetch;
   now: () => Date;
-}
-
-export class SourceRequestError extends Error {
-  constructor(
-    readonly url: string,
-    readonly httpStatus: number,
-  ) {
-    super(`Source request failed with HTTP ${httpStatus}: ${url}`);
-    this.name = "SourceRequestError";
-  }
 }
 
 export class SocrataPermitSource implements PagedSource {
