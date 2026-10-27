@@ -1,0 +1,10 @@
+{
+  "name": "@travis-oracle/pipeline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "ingest": "tsx src/cli.ts ingest"
+  }
+}
