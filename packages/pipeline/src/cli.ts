@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { runBuild } from "./commands/build-command.js";
 import { isSourceId, runIngest } from "./commands/ingest-command.js";
 import { runPublish } from "./commands/publish-command.js";
+import { runVerify } from "./commands/verify-command.js";
 import { isoDateOf } from "./domain/iso-date.js";
 import { runIdAt } from "./domain/run-id.js";
 
@@ -12,6 +13,7 @@ enum Command {
   Ingest = "ingest",
   Build = "build",
   Publish = "publish",
+  Verify = "verify",
 }
 
 const USAGE = [
@@ -20,6 +22,7 @@ const USAGE = [
   "       cli ingest tcad-parcels [--data-dir DIR] [--run-id ID]",
   "       cli build [--as-of YYYY-MM-DD] [--data-dir DIR] [--run-id ID]",
   "       cli publish [--run-id BUILD_ID] [--dry-run] [--data-dir DIR]",
+  "       cli verify --cid MANIFEST_CID",
 ].join("\n");
 
 async function main(argv: string[]): Promise<unknown> {
@@ -33,6 +36,7 @@ async function main(argv: string[]): Promise<unknown> {
       "run-id": { type: "string" },
       "as-of": { type: "string" },
       "dry-run": { type: "boolean", default: false },
+      cid: { type: "string" },
     },
   });
 
@@ -53,6 +57,9 @@ async function main(argv: string[]): Promise<unknown> {
       return runBuild(dataDir, runId, values["as-of"] ?? isoDateOf(new Date().toISOString()));
     case Command.Publish:
       return runPublish(dataDir, values["run-id"], values["dry-run"]);
+    case Command.Verify:
+      if (!values.cid) throw new Error(USAGE);
+      return runVerify(values.cid);
     default:
       throw new Error(USAGE);
   }

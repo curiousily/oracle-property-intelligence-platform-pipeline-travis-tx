@@ -4,6 +4,8 @@ on:
   schedule:
     # The city republishes the whole permits dataset daily at about 14:40–15:05 UTC.
     - cron: "30 16 * * *"
+    # Weekly publication to IPFS keeps vendor egress inside the free tiers.
+    - cron: "45 17 * * 1"
   workflow_dispatch:
     inputs:
       since:
@@ -142,7 +144,7 @@ jobs:
 
   publish:
     needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' && inputs.publish }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && (inputs.publish || github.event.schedule == '45 17 * * 1') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:

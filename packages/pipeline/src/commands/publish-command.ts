@@ -15,17 +15,13 @@ import {
   REPOSITORY,
   requiredEnv,
   resilientFetch,
+  VERIFICATION_GATEWAYS,
+  VERIFICATION_TIMEOUT_MS,
 } from "./settings.js";
 
 const IPNS_LABEL = "travis-oracle";
 const FILEBASE_RETAINED_PUBLICATIONS = 30;
 const PINATA_RETAINED_PUBLICATIONS = 3;
-const VERIFICATION_TIMEOUT_MS = 600_000;
-const VERIFICATION_GATEWAYS = [
-  "https://ipfs.orbitor.dev",
-  "https://dget.top",
-  "https://gateway.pinata.cloud",
-];
 const PUBLICATION_RESULT_FILE = "publication.json";
 const TABLES_PREFIX = "tables";
 const SAMPLES_DIR = "samples";

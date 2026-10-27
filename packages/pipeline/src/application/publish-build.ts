@@ -5,6 +5,7 @@ import {
   type Pin,
   PinMismatchError,
   type PinningProvider,
+  verificationTargets,
 } from "../domain/artifact-manifest.js";
 import {
   latestPublication,
@@ -104,11 +105,7 @@ export async function publishBuild(
     ipns,
   };
 
-  const targets: VerificationTarget[] = [
-    manifest.root,
-    ...manifest.objects,
-    encodedManifest.object,
-  ];
+  const targets: VerificationTarget[] = [...verificationTargets(manifest), encodedManifest.object];
   const verification = await verifier.verify(targets);
 
   const updated = [...earlier, publication];

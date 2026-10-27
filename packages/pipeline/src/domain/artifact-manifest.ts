@@ -131,3 +131,7 @@ export function buildManifest({
     previous: previous ? { manifest_cid: previous.manifestCid, root_cid: previous.rootCid } : null,
   };
 }
+
+export function verificationTargets(manifest: Manifest): ArtifactObject[] {
+  return [manifest.root, ...manifest.objects];
+}

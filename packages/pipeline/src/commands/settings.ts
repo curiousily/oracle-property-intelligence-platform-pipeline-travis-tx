@@ -11,6 +11,13 @@ export const PUBLISH_DIR = "publish";
 export const PUBLISHED_HISTORY_FILE = "published/history.json";
 export const BUILD_RESULT_FILE = "build.json";
 
+export const VERIFICATION_GATEWAYS = [
+  "https://ipfs.orbitor.dev",
+  "https://gw.ipfs-lens.dev",
+  "https://gateway.pinata.cloud",
+];
+export const VERIFICATION_TIMEOUT_MS = 600_000;
+
 const RETRY_POLICY: RetryPolicy = {
   maxAttempts: 5,
   baseDelayMs: 2_000,

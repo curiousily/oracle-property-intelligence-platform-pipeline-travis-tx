@@ -7,6 +7,7 @@ import {
   MANIFEST_SCHEMA,
   PinMismatchError,
   PinningProvider,
+  verificationTargets,
 } from "../../src/domain/artifact-manifest.js";
 
 const ROOT = "bafybeiemueagst5oc7kfeunh6cqagln4yw6g2rognqwx6bajps7ojax64q";
@@ -45,6 +46,26 @@ const matchingPins = [
   { provider: PinningProvider.Filebase, cid: ROOT },
   { provider: PinningProvider.Pinata, cid: ROOT },
 ];
+
+describe("verificationTargets", () => {
+  it("checks the dataset root first, then every listed object", () => {
+    const manifest = buildManifest({
+      buildId: "20261027T130000Z",
+      createdAt: "2026-10-27T13:05:00.000Z",
+      encoding,
+      pins: matchingPins,
+      previous: undefined,
+      carUrl: undefined,
+    });
+
+    expect(verificationTargets(manifest).map((target) => target.name)).toEqual([
+      "/",
+      "coverage.json",
+      "tables",
+      "tables/properties.parquet",
+    ]);
+  });
+});
 
 describe("buildManifest", () => {
   it("lists the dataset root, every object sorted by name, the CAR and how the DAG was made", () => {
