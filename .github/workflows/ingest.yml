@@ -83,3 +83,55 @@ jobs:
             cat "$DATA_DIR/runs/${RUN_ID}/${SOURCE}.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: source
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: ./.github/actions/r2-credentials
+        with:
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Fetch every permit page, the latest TCAD tables and parcels, and the previous build
+        run: |
+          latest_run() {
+            aws s3 ls "s3://$RAW_BUCKET/$1/" --endpoint-url "$R2_ENDPOINT" | awk '$1 == "PRE" { print $2 }' | tr -d '/' | sort | tail -1
+          }
+          fetch() {
+            aws s3 sync "s3://$RAW_BUCKET/$1" "$DATA_DIR/$1" --endpoint-url "$R2_ENDPOINT" --only-show-errors
+          }
+          fetch raw/austin-permits
+          fetch "tables/tcad-appraisal-export/$(latest_run tables/tcad-appraisal-export)"
+          fetch "raw/tcad-parcels/$(latest_run raw/tcad-parcels)"
+          previous="$(latest_run build)"
+          if [ -n "$previous" ]; then fetch "build/$previous"; fi
+
+      - name: Build the lead tables
+        run: |
+          build_id="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "BUILD_ID=${build_id}" >> "$GITHUB_ENV"
+          npm run build-leads -w @travis-oracle/pipeline --silent -- --data-dir "$DATA_DIR" --run-id "${build_id}"
+
+      - name: Upload the build
+        run: |
+          aws s3 sync "$DATA_DIR/build/${BUILD_ID}" "s3://$RAW_BUCKET/build/${BUILD_ID}" \
+            --endpoint-url "$R2_ENDPOINT" --only-show-errors
+
+      - name: Summarize the build
+        run: |
+          {
+            echo "### Lead tables \`${BUILD_ID}\`"
+            echo
+            echo '```json'
+            cat "$DATA_DIR/build/${BUILD_ID}/build.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
