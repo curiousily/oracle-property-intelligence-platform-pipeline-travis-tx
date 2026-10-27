@@ -69,7 +69,9 @@ WHERE table_name IN (${TABLES.map((table) => `'${table}'`).join(", ")})
 ORDER BY table_name, ordinal_position`);
   const tables: Record<string, { column: string; type: string }[]> = {};
   for (const { table_name: table, column_name: column, data_type: type } of columns as Row[]) {
-    (tables[String(table)] ??= []).push({ column: String(column), type: String(type) });
+    const described = tables[String(table)] ?? [];
+    described.push({ column: String(column), type: String(type) });
+    tables[String(table)] = described;
   }
   return tables;
 }
