@@ -60,7 +60,12 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
   const roofing = coverage.roofing_permits ?? {};
   const contractors = coverage.contractors ?? {};
   const permits = coverage.permits ?? {};
+  const businesses = coverage.businesses;
   const count = (group: Coverage[string], key: string) => Number(group[key] ?? 0);
+  const registryDetail =
+    contractors.with_registry_match === undefined
+      ? ""
+      : `, ${formatCount(count(contractors, "with_registry_match"))} resolved to a Texas Comptroller taxpayer, ${formatCount(count(contractors, "with_license"))} to TDLR licenses`;
   const locality = (properties.owner_locality ?? {}) as Record<string, number>;
   const outOfArea =
     (locality.regional ?? 0) + (locality.out_of_state ?? 0) + (locality.foreign ?? 0);
@@ -122,7 +127,11 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
           <Stat
             label="Contractors"
             value={formatCount(count(contractors, "rows"))}
-            detail={`${formatCount(count(contractors, "with_bbb_rating"))} with a BBB grade`}
+            detail={
+              contractors.with_roofing_permits === undefined
+                ? `${formatCount(count(contractors, "with_bbb_rating"))} with a BBB grade`
+                : `${formatCount(count(contractors, "with_roofing_permits"))} roofing, ${formatCount(count(contractors, "with_registry_match"))} in the state registry`
+            }
           />
           <Stat
             label="Located"
@@ -171,10 +180,23 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
             <KindRow
               kind="Contractor"
               records={count(contractors, "rows")}
-              detail={`reconciled from permit names and phones; ${formatCount(count(contractors, "with_bbb_rating"))} with a BBB grade`}
-              source="austin-permits"
+              detail={`reconciled from permit names and phones; ${formatCount(count(contractors, "with_bbb_rating"))} with a BBB grade${registryDetail}`}
+              source={
+                businesses
+                  ? "austin-permits, tx-franchise-taxpayers, tx-sales-tax-permits, tdlr-licenses"
+                  : "austin-permits"
+              }
               run={latestRun("austin-permits")}
             />
+            {businesses && (
+              <KindRow
+                kind="Business (sales tax outlet)"
+                records={count(businesses, "rows")}
+                detail={`Travis County locations with an active Texas sales tax permit; ${formatCount(count(businesses, "with_property"))} linked to a TCAD property, ${formatCount(count(businesses, "with_coordinates"))} located`}
+                source="tx-sales-tax-permits"
+                run={latestRun("tx-sales-tax-permits")}
+              />
+            )}
             <KindRow
               kind="Business (BBB profile)"
               records={build.sourceRows.bbbProfiles ?? 0}

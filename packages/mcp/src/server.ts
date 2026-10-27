@@ -19,7 +19,7 @@ export function createServer({ sql, dataset }: ServerDependencies): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      instructions: `Travis County, TX property intelligence for roofing leads: TCAD properties and owners, City of Austin permits, contractors with archived BBB grades and coordinates, published on IPFS as dataset ${dataset.rootCid ?? dataset.buildId}. Tables: properties, roofing_permits, contractors, permits. Prefer the find_* tools; use run_sql for anything else.`,
+      instructions: `Travis County, TX property intelligence for roofing leads: TCAD properties and owners, City of Austin permits, contractors with archived BBB grades, Texas Comptroller registrations and TDLR licenses, Travis County sales tax outlets as businesses, and coordinates, published on IPFS as dataset ${dataset.rootCid ?? dataset.buildId}. Tables: ${TABLES.join(", ")}. Prefer the find_* tools; use run_sql for anything else.`,
     },
   );
 
@@ -45,8 +45,7 @@ export function createServer({ sql, dataset }: ServerDependencies): McpServer {
   server.registerTool(
     "run_sql",
     {
-      description:
-        "Run one read-only DuckDB SELECT over the published tables properties, roofing_permits, contractors and permits.",
+      description: `Run one read-only DuckDB SELECT over the published tables ${TABLES.join(", ")}.`,
       inputSchema: z.object({
         sql: z.string().min(1).describe("One SELECT statement."),
         max_rows: z.number().int().positive().max(MAX_SQL_ROWS).default(DEFAULT_SQL_ROWS),

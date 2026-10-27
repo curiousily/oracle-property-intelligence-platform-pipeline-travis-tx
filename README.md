@@ -1,6 +1,6 @@
 # Travis County Oracle: property intelligence pipeline
 
-A continuous, incremental pipeline that loads Travis County, TX property and ownership data (TCAD), City of Austin permits, contractors, archived BBB grades and coordinates into DuckDB-queryable Parquet tables. It publishes every snapshot to public IPFS as content-addressed artifacts and serves it to a browser UI, an agent and MCP clients. Oracle carries no infrastructure cost: everything runs on free plans.
+A continuous, incremental pipeline that loads Travis County, TX property and ownership data (TCAD), City of Austin permits, contractors resolved to the Texas Comptroller and TDLR registries, Travis County businesses, archived BBB grades and coordinates into DuckDB-queryable Parquet tables. It publishes every snapshot to public IPFS as content-addressed artifacts and serves it to a browser UI, an agent and MCP clients. Oracle carries no infrastructure cost: everything runs on free plans.
 
 The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 
@@ -9,8 +9,8 @@ The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 | What | Where |
 |---|---|
 | Explorer: run history, IPFS manifest with live gateway checks, leads map, SQL, agent, MCP console | https://travis-oracle-explorer.curiousily.workers.dev |
-| Latest dataset root (directory CID) | `bafybeicoluracttpsh4wv23hwamtxrnse2ttwute2fmw45j7xffp47nwgi` |
-| Latest artifact manifest (file CID) | `bafkreifvwkazir7b4qmewtv5q6nsxkoxbq23f6usshshkbbmgfju3kdypm` |
+| Latest dataset root (directory CID) | `bafybeiewr675hsu73dwtwvnr2rmo3ppcanzkmwwmaj4w2uetgusxz2bqq4` |
+| Latest artifact manifest (file CID) | `bafkreiddt3p62u3px2iclvgtzritjisx2f74cu3tkwethx3ccnzdh46emu` |
 | IPNS name (pointer to the latest manifest) | `k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c` |
 | CARs and manifests of every publication | [GitHub Releases](https://github.com/curiousily/oracle-property-intelligence-platform-pipeline-travis-tx/releases) |
 | MCP server | `npm ci && npm run --silent mcp` (see [MCP](#mcp)) |
@@ -19,21 +19,22 @@ The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
 Open any CID on a public gateway this project does not operate. ipfs.orbitor.dev and gw.ipfs-lens.dev are run by neither this project nor its pinning vendors. The brief's examples, ipfs.io and dweb.link, no longer serve arbitrary content (they return 429 or were retired in 2026):
 
 ```bash
-curl -s https://ipfs.orbitor.dev/ipfs/bafkreifvwkazir7b4qmewtv5q6nsxkoxbq23f6usshshkbbmgfju3kdypm | jq '.objects[] | {name, cid, size, sha256}'
-curl -s https://gw.ipfs-lens.dev/ipfs/bafybeicoluracttpsh4wv23hwamtxrnse2ttwute2fmw45j7xffp47nwgi/coverage.json | sha256sum
+curl -s https://ipfs.orbitor.dev/ipfs/bafkreiddt3p62u3px2iclvgtzritjisx2f74cu3tkwethx3ccnzdh46emu | jq '.objects[] | {name, cid, size, sha256}'
+curl -s https://gw.ipfs-lens.dev/ipfs/bafybeiewr675hsu73dwtwvnr2rmo3ppcanzkmwwmaj4w2uetgusxz2bqq4/coverage.json | sha256sum
 curl -sI https://ipfs.orbitor.dev/ipns/k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c | grep -i x-ipfs-roots
 ```
 
 ## What the dataset holds
 
-Publication `20261027T100024Z`:
+Publication `20261027T145411Z`:
 
 | Table | Rows | What a row is |
 |---|---:|---|
 | `properties` | 453,713 | One TCAD property: situs address, owners and mailing address, owner locality, deed date and ownership years, values, year built, roof covering, estimated roof age with its basis and confidence, roofing-permit counts, coordinates with their source |
 | `roofing_permits` | 37,613 | One roofing permit: kind of roof work, status, permit state, open-since date, years open, expiry, contractor, BBB grade as of its snapshot date, linked TCAD property, coordinates, link to the city record |
-| `contractors` | 6,062 | One reconciled roofing contractor: every name and phone used on permits, permit counts, BBB grade, accreditation, how and how confidently the BBB profile was matched |
-| `permits` | 2,381,903 | Every City of Austin permit, all types, with dates, contractor fields and the linked TCAD property |
+| `contractors` | 52,367 | One reconciled permit contractor (6,062 with roofing permits): every name, phone and trade used on permits, permit and roofing-permit counts, BBB grade and accreditation, the Texas Comptroller taxpayer (legal name, organization type, active right to transact, Secretary of State file, charter date, Travis County outlets) and TDLR licenses, each with how and how confidently it was matched |
+| `permits` | 2,381,903 | Every City of Austin permit, all types, with dates, contractor fields and key, and the linked TCAD property |
+| `businesses` | 49,017 | One Travis County business location with an active Texas sales tax permit: outlet and taxpayer names, organization type, NAICS code, address, permit and first-sales dates, active right to transact, the TCAD property at its address, coordinates |
 
 Coverage highlights, from the published `coverage.json`:
 - 445,201 properties located (98.1%).
@@ -41,7 +42,9 @@ Coverage highlights, from the published `coverage.json`:
 - 5,016 roofing permits never finished. 3,708 of them have been unfinished for 5+ years: 21 are still open, and the rest expired without a final inspection. Searches return still-open permits by default; expired ones are opt-in.
 - 155,897 properties held more than 10 years.
 - 48,530 owners outside the Austin area.
-- 206 contractors with a BBB grade, matched against 1,589 archived BBB profiles. The profiles are used for grading only and are not published as a table of their own.
+- 339 contractors with a BBB grade, matched against 1,589 archived BBB profiles. The profiles are used for grading only and are not published as a table of their own.
+- 11,598 contractors resolved to a Texas Comptroller taxpayer (1,798 of the 6,062 roofing contractors), and 762 to TDLR contractor licenses.
+- 28,222 of 49,017 businesses linked to a TCAD property, 39,296 located.
 
 Every published snapshot also contains:
 - `build.json`: inputs, source row counts, per-table deltas.
@@ -59,6 +62,7 @@ flowchart LR
     G[TCAD parcels<br/>ArcGIS]
     A[Address points<br/>ArcGIS]
     B[BBB profiles<br/>Wayback Machine]
+    X[Comptroller and TDLR<br/>Texas Open Data]
   end
   subgraph GitHub Actions
     I[ingest per source<br/>daily, incremental] --> R[(R2 raw store<br/>gzipped pages + SHA-256 receipts)]
@@ -87,7 +91,10 @@ flowchart LR
 | TCAD appraisal export | Export catalog page; downloads only a new year or supplement | 14–26 s (unchanged) | 73 s for 511 MB |
 | TCAD parcels (ArcGIS) | Layer edit date | 14–21 s (unchanged) | 60 s, 386 k features |
 | Address points (ArcGIS) | Layer edit date | 18–22 s (unchanged) | 77 s, 466 k features |
-| BBB archive (Wayback) | CDX capture index; fetches only captures not archived yet, known contractors first | 20 min time box, about 770 profiles | grows each day until the index is exhausted |
+| BBB archive (Wayback) | CDX capture index; fetches only captures not archived yet, known roofing contractors first | 20 min time box, about 770 profiles | grows each day until the index is exhausted |
+| Sales tax outlets, Travis County (Socrata `jrea-zgmq`) | Dataset rows-updated time; a new snapshot only when it moves | 14–20 s (unchanged) | 38 s, 49 k rows |
+| Franchise taxpayers, statewide (Socrata `9cir-efmm`) | Same | 14–20 s (unchanged) | 8 min, 3.49 M rows in 70 pages |
+| TDLR licenses, Travis County (Socrata `7358-krk7`) | Same | 14–20 s (unchanged) | 32 s, 37 k rows |
 
 - **Schedule.** Ingest and build run daily at 16:30 UTC, after the city republishes its permits. Publication runs weekly, Mondays at 17:45 UTC, and either can be dispatched by hand ([ingest.yml](.github/workflows/ingest.yml)).
 - **Idempotent and recorded.** Every source writes a watermark only after its raw pages and run record are stored. Every run writes a JSON record (timestamps, window, pages, records, watermark, receipts).
@@ -99,7 +106,9 @@ flowchart LR
 
 - **Properties.** TCAD rows are reconciled to one row per property id; multiple owners keep the primary owner plus every name.
 - **Permit links.** Permits link to properties by TCAD parcel id. Each permit carries a link status: linked, ambiguous parcel, missing parcel id, or parcel not in the roll.
-- **Contractors.** Free-text company names and phones are normalized into contractor keys, and placeholder phones are ignored.
+- **Contractors.** Free-text company names and phones on every permit are normalized into contractor keys, and placeholder phones are ignored.
+- **State registry and licenses.** Contractor keys are matched to Texas Comptroller taxpayers (franchise taxpayers statewide plus Travis County sales tax permit holders, by legal and outlet names) and to TDLR contractor licenses (grouped per business, by name and phone). The match order is name and phone (high), unique phone (medium), unique name (medium), then the single Austin-area candidate among namesakes (low). A contractor known on permits only by a person's name is never matched by name alone.
+- **Businesses.** Sales tax outlet addresses are parsed into street-address keys and linked to the one TCAD property with the same key and ZIP code; coordinates come from that property, or else from a county address point.
 - **Coordinates.** Each property takes the first available of: its own parcel centroid, then a shared parcel (condos and mobile homes), then a county address point (unique within about 400 m), then permit coordinates. The source used is recorded per row.
 - **Roof age.** The most recent completed reroof permit gives high confidence, a completed new-construction permit medium, and the improvement's year built low. Basis, date, permit and confidence are kept on every row.
 - **Permit lifecycle.**
@@ -121,7 +130,7 @@ flowchart LR
 | `find_open_roofing_permits` | Roofing permits still open N+ years (default 5), longest open first, with contractor and BBB grade. Expired-without-final, accessory work and contractor-only are options. |
 | `find_long_held_properties` | Properties whose owner has held them more than N years (default 10). |
 | `find_out_of_area_owners` | Properties whose owner mails from outside the Austin area. |
-| `property_details`, `contractor_details` | One property with its roofing permits; one contractor with its BBB grade and permits. |
+| `property_details`, `contractor_details` | One property with its roofing permits; one contractor, found by any permit, BBB or registered legal name, with its BBB grade, Texas registry and TDLR matches and roofing permits. |
 | `locate_place`, `dataset_summary` | Census place coordinates; build id, CIDs and coverage of the dataset being queried. |
 
 Inputs are zod schemas exported as JSON Schema. Every result carries the SQL that produced it, the dataset CIDs and, for radius searches, `summary` counts over all matches (for example how many list a contractor or a BBB grade).
@@ -159,6 +168,7 @@ These limitations are published with every snapshot (`sources.json`) and shown i
   - Only archived profiles exist, and grades can be stale; each is shown with its snapshot date.
   - The CDX index and snapshots are slow, so each run is time-boxed at one request a second and continues where the last run stopped.
 - **Coordinates.** Parcel centroids mark parcels, not roofs. Condos and mobile homes share a parcel and fall back to address points.
+- **Texas registries.** Sales tax permits list only businesses that sell taxable items; sole proprietors are not franchise taxpayers; Texas does not license roofing contractors, so TDLR matches identify a contractor's other licensed trades.
 - **Network.** data.texas.gov and gis.traviscountytx.gov time out from outside the US, which is why ingestion runs on GitHub-hosted US runners.
 
 ## Cost
@@ -190,7 +200,7 @@ npm run build-leads -w @travis-oracle/pipeline
 # Encode the IPFS dataset without publishing, or publish with FILEBASE_* and PINATA_JWT set
 npm run publish -w @travis-oracle/pipeline -- --dry-run
 # Verify any published manifest on the public gateways
-npm run verify -w @travis-oracle/pipeline -- --cid bafkreifvwkazir7b4qmewtv5q6nsxkoxbq23f6usshshkbbmgfju3kdypm
+npm run verify -w @travis-oracle/pipeline -- --cid bafkreiddt3p62u3px2iclvgtzritjisx2f74cu3tkwethx3ccnzdh46emu
 
 # Explorer
 npm run dev -w @travis-oracle/explorer          # local Worker + UI (needs wrangler login)
@@ -213,19 +223,20 @@ The CI secrets are `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `FILEBASE_AC
 
 The soofi-xyz team kit is enabled in this repository (`.claude/settings.json`), and its Elephant oracle skills are pinned (`skills-lock.json`).
 
-**Followed**, from the kit's county query-table pattern (`county-query-table-publish`, `deploy-open-data-mcp`):
+**Followed**, from the kit's county query-table pattern (`county-query-table-publish`, `deploy-open-data-mcp`) and its contractor-identity guidance:
 - one row per property in a Parquet query table on public IPFS via Filebase, behind an IPNS name
 - DuckDB range-reading that table straight from a gateway
 - an MCP server with a schema tool (`get_schema`) and read-only SQL next to the task tools
+- contractor identity resolved against the official corporate registry (Texas Comptroller franchise and sales tax records, with Secretary of State file numbers) and the state licensing authority (TDLR), each match with its method and confidence
 
 **Not followed:**
 - **Hosting.** The kit's golden path is AWS (Amplify, CDK and tRPC for full-stack work; Bedrock and OpenSearch for agents). This project runs on Cloudflare's free plan instead, because the brief requires that Oracle carry no ongoing infrastructure cost.
 - **Publication path.** The kit's `oracle` agent publishes Lexicon data groups through elephant-cli and an Atlas county page. Those groups are not produced here. Publication is a self-describing UnixFS snapshot with its own manifest, CAR and IPNS pointer.
-- **Contractor identity.** The kit resolves contractors against an official corporate registry and licensing authority. Here they are reconciled from permit names and phones, plus archived BBB profiles.
 
 ## Known gaps
 
 - **Permits outside the City of Austin.** They are not in the dataset (see [Source limitations](#source-limitations-and-speed)).
 - **BBB coverage.** It grows about 770 archived profiles a day until the archive index is exhausted. Matching stays heuristic and carries a confidence.
+- **Trade names.** Permit names such as "X Holdings LLC dba Y Roofing" are matched as one name, so the legal and trade names are not tried separately yet.
 - **No hosted MCP endpoint.** The MCP server is stdio, run from a clone. A Worker on the free plan cannot run DuckDB, so the hosted surfaces are the explorer and its in-browser tool console.
 - **R2 retention.** Builds and raw pages are kept indefinitely; expiring old builds is the next step to stay inside the 10 GB free tier.

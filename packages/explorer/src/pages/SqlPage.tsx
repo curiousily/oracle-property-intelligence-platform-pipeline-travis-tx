@@ -1,4 +1,4 @@
-import { TABLES } from "@travis-oracle/query-core";
+import { publishedTables } from "@travis-oracle/query-core";
 import { useState } from "react";
 import { Card, Cid, DataTable, ErrorNote, Spinner } from "../components/ui.js";
 import type { Dataset } from "../data/dataset.js";
@@ -11,7 +11,8 @@ const EXAMPLES: { label: string; sql: string }[] = [
     sql: `SELECT 'properties' AS table_name, count(*) AS rows FROM properties
 UNION ALL SELECT 'roofing_permits', count(*) FROM roofing_permits
 UNION ALL SELECT 'contractors', count(*) FROM contractors
-UNION ALL SELECT 'permits', count(*) FROM permits`,
+UNION ALL SELECT 'permits', count(*) FROM permits
+UNION ALL SELECT 'businesses', count(*) FROM businesses`,
   },
   {
     label: "Roof-age basis",
@@ -37,6 +38,23 @@ LIMIT 25`,
        bbb_rating, bbb_accredited, bbb_match_method, bbb_snapshot_date
 FROM contractors
 ORDER BY roofing_permits DESC
+LIMIT 25`,
+  },
+  {
+    label: "Roofing contractors in the Texas registry",
+    sql: `SELECT contractor_key, roofing_permits, registry_name, registry_organization_type,
+       registry_active, registry_charter_date, registry_match_method, license_types
+FROM contractors
+WHERE roofing_permits > 0 AND registry_taxpayer_number IS NOT NULL
+ORDER BY roofing_permits DESC
+LIMIT 25`,
+  },
+  {
+    label: "Roofing businesses with a Travis County sales tax outlet",
+    sql: `SELECT outlet_name, taxpayer_name, address, city, zip, permit_issue_date, prop_id
+FROM businesses
+WHERE naics_code = '238160'
+ORDER BY permit_issue_date
 LIMIT 25`,
   },
   {
@@ -101,7 +119,7 @@ export function SqlPage({ dataset, database }: { dataset: Dataset; database: Dat
         <div className="sql-layout">
           <aside className="schema">
             <h3>Tables</h3>
-            {TABLES.map((table) => (
+            {publishedTables(dataset.build.tables).map((table) => (
               <details
                 key={table}
                 onToggle={(event) => (event.currentTarget.open ? loadSchema(table) : undefined)}

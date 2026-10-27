@@ -18,6 +18,9 @@ test("shows the pipeline run summary, records by kind and documented source limi
     .filter({ has: page.getByText("Properties", { exact: true }) });
   await expect(properties).toContainText(/\d{3},\d{3}/);
   await expect(page.getByRole("heading", { name: "Records by kind" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Business \(sales tax outlet\)/ })).toContainText(
+    /linked to a TCAD property/,
+  );
   await expect(page.getByRole("heading", { name: "Run history" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Infrastructure and cost" })).toBeVisible();
   await page.screenshot({ path: `${SCREENSHOTS}/overview.png`, fullPage: true });
@@ -55,8 +58,12 @@ test("runs SQL in DuckDB-WASM over the published Parquet tables", async ({ page 
 
   await page.getByRole("button", { name: "Run query" }).click();
 
-  await expect(page.locator(".data-table tbody tr")).toHaveCount(4);
-  await expect(page.locator(".data-table")).toContainText("properties");
+  await expect(page.locator(".data-table tbody tr")).toHaveCount(5);
+  await expect(page.locator(".data-table")).toContainText("businesses");
+
+  await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();
+  await expect(page.locator(".data-table thead")).toContainText("registry_name");
+  await expect(page.locator(".data-table tbody tr").first()).toContainText(/LLC|INC/);
   await page.screenshot({ path: `${SCREENSHOTS}/sql.png`, fullPage: true });
 });
 

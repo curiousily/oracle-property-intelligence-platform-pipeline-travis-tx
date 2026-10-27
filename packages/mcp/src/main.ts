@@ -1,6 +1,5 @@
 import { DuckDBInstance } from "@duckdb/node-api";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { TABLES } from "@travis-oracle/query-core";
 import { resolveDataset } from "./dataset-source.js";
 import { DuckDbRunner } from "./duckdb-runner.js";
 import { createServer } from "./server.js";
@@ -17,7 +16,7 @@ const dataset = await resolveDataset({
 });
 
 const connection = await (await DuckDBInstance.create(":memory:")).connect();
-for (const table of TABLES) {
+for (const table of dataset.tables) {
   await connection.run(
     `CREATE VIEW ${table} AS SELECT * FROM read_parquet('${dataset.tableUrl(table)}')`,
   );
