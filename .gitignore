@@ -8,3 +8,4 @@ packages/*/data/
 test-results/
 playwright-report/
 .wrangler/
+packages/*/demo/output/
