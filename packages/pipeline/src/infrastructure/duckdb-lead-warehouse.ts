@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { type DuckDBAppender, type DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import type {
@@ -24,7 +24,7 @@ import {
   LONG_OWNERSHIP_YEARS,
 } from "../domain/lead-thresholds.js";
 import { PermitLinkStatus } from "../domain/permit-link.js";
-import type { PermitState } from "../domain/permit-state.js";
+import { PermitState } from "../domain/permit-state.js";
 import { ROOF_AGE_EVIDENCE, ROOFING_WORK, type RoofWork } from "../domain/roof-work.js";
 import { SourceId } from "../domain/source-id.js";
 import { MAX_ADDRESS_POINT_SPREAD_DEGREES, STREET_TYPE_ALIASES } from "../domain/street-address.js";
@@ -49,6 +49,7 @@ const LONG_OPEN_SAMPLE_FILE = "long-open-roofing-permits.csv";
 const AGED_ROOFS_SAMPLE_FILE = "aged-roofs.csv";
 const SAMPLE_ROWS = 100;
 const PROVENANCE_COLUMNS = ["source_run_id"];
+const STAGING_SUFFIX = ".staging.parquet";
 const CONFIDENCE_ORDER = [Confidence.High, Confidence.Medium, Confidence.Low]
   .map((confidence, rank) => `WHEN '${confidence}' THEN ${rank}`)
   .join(" ");
@@ -609,6 +610,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     const [roofing] = await this.rows(`
       SELECT count(*) AS rows, count(*) FILTER (WHERE unfinished) AS unfinished,
         count(*) FILTER (WHERE unfinished AND years_open >= ${LONG_OPEN_PERMIT_YEARS}) AS open_${LONG_OPEN_PERMIT_YEARS}_years_or_more,
+        count(*) FILTER (WHERE permit_state = ${literal(PermitState.Open)} AND years_open >= ${LONG_OPEN_PERMIT_YEARS}) AS still_open_${LONG_OPEN_PERMIT_YEARS}_years_or_more,
         count(contractor_name) AS with_contractor, count(latitude) AS with_coordinates
       FROM export_roofing_permits`);
     const [permits] = await this.rows(
@@ -677,20 +679,24 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
   ): Promise<TableSummary> {
     const key = EXPORT_KEYS[table];
     const output = join(outputDir, `${table}.parquet`);
-    await this.connection.run(
-      `COPY (SELECT * FROM export_${table} ORDER BY ${key}) TO ${literal(output)} (FORMAT parquet, COMPRESSION zstd)`,
-    );
-    const rows = await this.count(`read_parquet(${literal(output)})`);
-
     const previous = previousDir ? join(previousDir, `${table}.parquet`) : undefined;
-    if (previous === undefined || !(await exists(previous))) {
-      return { table, rows, added: rows, changed: 0, removed: 0 };
-    }
+    const exportTo = async (path: string) =>
+      this.connection.run(
+        `COPY (SELECT * FROM export_${table} ORDER BY ${key}) TO ${literal(path)} (FORMAT parquet, COMPRESSION zstd)`,
+      );
 
-    const content = await this.contentFingerprint(output, previous);
+    const prior = previous !== undefined && (await exists(previous)) ? previous : undefined;
+    const staging = join(outputDir, `${table}${STAGING_SUFFIX}`);
+    await exportTo(staging);
+    await this.keepUnchangedProvenance(staging, prior, key, output);
+    await rm(staging, { force: true });
+    const rows = await this.count(`read_parquet(${literal(output)})`);
+    if (prior === undefined) return { table, rows, added: rows, changed: 0, removed: 0 };
+
+    const content = await this.contentFingerprint(output, prior);
     const [delta] = await this.rows(`
       WITH current AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(output)}) t),
-      previous AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(previous)}) t)
+      previous AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(prior)}) t)
       SELECT
         count(*) FILTER (WHERE previous.k IS NULL) AS added,
         count(*) FILTER (WHERE current.k IS NOT NULL AND previous.k IS NOT NULL AND current.h <> previous.h) AS changed,
@@ -706,13 +712,54 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     };
   }
 
+  private async keepUnchangedProvenance(
+    staging: string,
+    previous: string | undefined,
+    key: string,
+    output: string,
+  ): Promise<void> {
+    const previousColumns = new Set(await this.columnsOf(previous ?? staging));
+    const provenance = (await this.columnsOf(staging)).filter(
+      (column) => PROVENANCE_COLUMNS.includes(column) && previousColumns.has(column),
+    );
+    if (provenance.length === 0) {
+      await rename(staging, output);
+      return;
+    }
+    const content = await this.contentFingerprint(staging, previous ?? staging);
+    const priorRows = previous
+      ? `read_parquet(${literal(previous)}) t`
+      : `read_parquet(${literal(staging)}) t WHERE false`;
+    const carried = provenance
+      .map(
+        (column) =>
+          `CASE WHEN prior.content = current.content THEN prior."prior_${column}" ELSE current."${column}" END AS "${column}"`,
+      )
+      .join(", ");
+    await this.connection.run(`
+      COPY (
+        WITH current AS (SELECT t.*, ${content} AS content FROM read_parquet(${literal(staging)}) t),
+        prior AS (
+          SELECT ${key} AS prior_key, ${content} AS content,
+            ${provenance.map((column) => `t."${column}" AS "prior_${column}"`).join(", ")}
+          FROM ${priorRows}
+        )
+        SELECT current.* EXCLUDE (content) REPLACE (${carried})
+        FROM current LEFT JOIN prior ON current.${key} = prior.prior_key
+        ORDER BY current.${key}
+      ) TO ${literal(output)} (FORMAT parquet, COMPRESSION zstd)
+    `);
+  }
+
+  private async columnsOf(parquet: string): Promise<string[]> {
+    return (await this.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(parquet)})`)).map(
+      (row) => String(row.column_name),
+    );
+  }
+
   private async contentFingerprint(current: string, previous: string): Promise<string> {
-    const columnsOf = async (parquet: string) =>
-      (await this.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(parquet)})`)).map((row) =>
-        String(row.column_name),
-      );
-    const previousColumns = new Set(await columnsOf(previous));
-    const columns = (await columnsOf(current)).filter(
+    const previousColumns = new Set(await this.columnsOf(previous));
+    const columns = (await this.columnsOf(current)).filter(
       (column) => previousColumns.has(column) && !PROVENANCE_COLUMNS.includes(column),
     );
     return `md5(CAST(struct_pack(${columns.map((column) => `"${column}" := t."${column}"`).join(", ")}) AS VARCHAR))`;

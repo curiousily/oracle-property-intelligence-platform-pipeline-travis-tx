@@ -483,6 +483,8 @@ describe("DuckDbLeadWarehouse", () => {
     expect(coverage.roofing_permits).toMatchObject({
       rows: 3,
       unfinished: 2,
+      open_5_years_or_more: 2,
+      still_open_5_years_or_more: 1,
       with_contractor: 2,
       link_status: { linked: 2, ambiguous_parcel: 1 },
     });
@@ -563,7 +565,7 @@ describe("DuckDbLeadWarehouse", () => {
     );
   });
 
-  it("does not count a re-fetch of identical permits as a change", async () => {
+  it("does not count or publish a re-fetch of identical permits as a change", async () => {
     await writeGzipJson(
       join(dataDir, "raw", "austin-permits", "20261028T000000Z", "page-00001.json.gz"),
       LATEST_PERMITS,
@@ -577,6 +579,13 @@ describe("DuckDbLeadWarehouse", () => {
         { table: "roofing_permits", rows: 3, added: 0, changed: 0, removed: 0 },
       ]),
     );
+    const digest = async (buildId: string, table: string) =>
+      createHash("sha256")
+        .update(await readFile(join(dataDir, "build", buildId, `${table}.parquet`)))
+        .digest("hex");
+    for (const table of ["permits", "roofing_permits"]) {
+      expect(await digest("build-4", table)).toBe(await digest("build-1", table));
+    }
   });
 
   it("writes byte-identical tables from the same inputs, so unchanged tables keep their CIDs", async () => {
