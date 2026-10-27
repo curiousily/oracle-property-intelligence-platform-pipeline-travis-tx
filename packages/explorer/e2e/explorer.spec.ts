@@ -40,7 +40,7 @@ test("finds aged roofs and long-open roofing permits within a radius", async ({ 
 
   const results = page.locator(".card").filter({ hasText: "matches within" });
   await expect(results).toContainText(/[\d,]+ matches within 5 miles of Austin/);
-  await expect(results.locator("tbody tr").first()).toContainText(/completed_replacement.*high/);
+  await expect(results.locator("tbody tr").first()).toContainText(/completed replacement.*high/);
 
   await page.getByRole("tab", { name: "Open roofing permits" }).click();
   await expect(results).toContainText(/[\d,]+ matches within 5 miles of Austin/);
