@@ -18,6 +18,7 @@ const MAX_TRANSCRIPT_DIFFERENCE = 0.08;
 const PARALLEL_REQUESTS = 4;
 const UNCHECKED_SUFFIX = ".unchecked.wav";
 const CLOSING_MS = 2_000;
+const VISIBLE_EDGE_MS = 400;
 const MS_PER_SECOND = 1_000;
 const SPOKEN_SCALES = { thousand: 1_000, million: 1_000_000 };
 const NUMBER_WORDS = [
@@ -54,8 +55,14 @@ interface Clip {
   durationMs: number;
 }
 
+interface Span {
+  fromMs: number;
+  toMs: number;
+}
+
 export class Narrator {
   private readonly cues: { clip: Clip; atMs: number }[] = [];
+  private readonly cuts: Span[] = [];
   private startedAt = 0;
 
   private constructor(private readonly clips: ReadonlyMap<string, Clip>) {}
@@ -75,26 +82,66 @@ export class Narrator {
   say(text: string): number {
     const clip = this.clips.get(text);
     if (!clip) throw new Error(`No narration prepared for: ${text}`);
-    this.cues.push({ clip, atMs: Date.now() - this.startedAt });
+    this.cues.push({ clip, atMs: this.elapsedMs() });
     return clip.durationMs;
   }
 
+  async cutWaiting<T>(wait: () => Promise<T>): Promise<T> {
+    const fromMs = this.elapsedMs() + VISIBLE_EDGE_MS;
+    const result = await wait();
+    const toMs = this.elapsedMs() - VISIBLE_EDGE_MS;
+    if (toMs > fromMs) this.cuts.push({ fromMs, toMs });
+    return result;
+  }
+
   async mixInto(video: string, output: string): Promise<void> {
-    const inputs = this.cues.flatMap(({ clip }) => ["-i", clip.wav]);
-    const delayed = this.cues.map(
-      ({ atMs }, index) => `[${index + 1}:a]adelay=${atMs}:all=1[a${index}]`,
-    );
-    const mixed = `${this.cues.map((_, index) => `[a${index}]`).join("")}amix=inputs=${this.cues.length}:normalize=0,apad[voice]`;
     const last = this.cues.at(-1);
     const endMs = last ? last.atMs + last.clip.durationMs + CLOSING_MS : 0;
+    const kept = keptSpans(this.cuts, endMs);
+    const segments = kept.map(
+      ({ fromMs, toMs }, index) =>
+        `[0:v]trim=start=${seconds(fromMs)}:end=${seconds(toMs)},setpts=PTS-STARTPTS[v${index}]`,
+    );
+    const joined = `${kept.map((_, index) => `[v${index}]`).join("")}concat=n=${kept.length}:v=1:a=0[video]`;
+    const delayed = this.cues.map(
+      ({ atMs }, index) => `[${index + 1}:a]adelay=${this.withoutCuts(atMs)}:all=1[a${index}]`,
+    );
+    const mixed = `${this.cues.map((_, index) => `[a${index}]`).join("")}amix=inputs=${this.cues.length}:normalize=0,apad[voice]`;
     await exec("ffmpeg", [
-      ...["-loglevel", "error", "-y", "-i", video, ...inputs],
-      ...["-filter_complex", [...delayed, mixed].join(";")],
-      ...["-map", "0:v", "-map", "[voice]", "-t", String(endMs / MS_PER_SECOND)],
+      ...["-loglevel", "error", "-y", "-i", video],
+      ...this.cues.flatMap(({ clip }) => ["-i", clip.wav]),
+      ...["-filter_complex", [...segments, joined, ...delayed, mixed].join(";")],
+      ...["-map", "[video]", "-map", "[voice]", "-t", seconds(this.withoutCuts(endMs))],
       ...["-c:v", "libx264", "-crf", VIDEO_QUALITY, "-pix_fmt", "yuv420p"],
       ...["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-movflags", "+faststart", output],
     ]);
   }
+
+  private elapsedMs(): number {
+    return Date.now() - this.startedAt;
+  }
+
+  private withoutCuts(atMs: number): number {
+    const removed = this.cuts
+      .filter((cut) => cut.toMs <= atMs)
+      .reduce((total, cut) => total + cut.toMs - cut.fromMs, 0);
+    return atMs - removed;
+  }
+}
+
+function keptSpans(cuts: readonly Span[], endMs: number): Span[] {
+  const kept: Span[] = [];
+  let fromMs = 0;
+  for (const cut of cuts) {
+    kept.push({ fromMs, toMs: cut.fromMs });
+    fromMs = cut.toMs;
+  }
+  kept.push({ fromMs, toMs: endMs });
+  return kept.filter((span) => span.toMs > span.fromMs);
+}
+
+function seconds(ms: number): string {
+  return String(ms / MS_PER_SECOND);
 }
 
 async function voiced(text: string, cacheDir: string, apiKey: string): Promise<Clip> {

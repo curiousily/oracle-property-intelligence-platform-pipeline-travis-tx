@@ -15,7 +15,7 @@ const PAUSE_AFTER_LINE_MS = 900;
 const SETTLE_MS = 1_500;
 const DATA_TIMEOUT_MS = 120_000;
 const AGENT_TIMEOUT_MS = 180_000;
-const TERMINAL_LINE_DELAY_MS = 450;
+const TERMINAL_LINE_DELAY_MS = 250;
 const PLACE = "Rollingwood";
 const AGENT_PLACE = "West Lake Hills";
 const AGENT_QUESTION = `Which properties in Travis County within five miles of ${AGENT_PLACE} have roofs older than 15 years?`;
@@ -136,6 +136,7 @@ async function record() {
   const narrator = await Narrator.prepare(Object.values(lines), NARRATION_CACHE_DIR);
   const narrate = async (page: Page, line: string) =>
     page.waitForTimeout(narrator.say(line) + PAUSE_AFTER_LINE_MS);
+  const quickly = <T>(wait: () => Promise<T>) => narrator.cutWaiting(wait);
 
   await rm(OUTPUT_DIR, { recursive: true, force: true });
   await mkdir(OUTPUT_DIR, { recursive: true });
@@ -150,7 +151,7 @@ async function record() {
   );
   narrator.startRecording();
 
-  await open(page, "overview");
+  await quickly(() => open(page, "overview"));
   await narrate(page, lines.intro);
   await narrate(page, lines.summary);
   await show(page.getByRole("heading", { name: "Records by kind" }));
@@ -162,55 +163,71 @@ async function record() {
   await show(page.getByRole("heading", { name: "Infrastructure and cost" }));
   await narrate(page, lines.cost);
 
-  await open(page, "sql");
+  await quickly(() => open(page, "sql"));
   await narrate(page, lines.sql);
-  await page.getByRole("button", { name: "Run query" }).click();
-  await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: "Run query" }).click();
+    await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.tableCounts);
-  await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();
-  await page
-    .locator(".data-table thead")
-    .getByText("registry_name")
-    .waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();
+    await page
+      .locator(".data-table thead")
+      .getByText("registry_name")
+      .waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.registry);
 
-  await open(page, "publication");
+  await quickly(() => open(page, "publication"));
   await narrate(page, lines.manifest);
   await show(page.getByRole("heading", { name: "Objects" }));
   const coverage = page.locator("tr").filter({ hasText: "coverage.json" });
-  await coverage.getByRole("button", { name: /verify/ }).click();
-  await coverage.getByText("gw.ipfs-lens.dev: verified").waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await coverage.getByRole("button", { name: /verify/ }).click();
+    await coverage.getByText("gw.ipfs-lens.dev: verified").waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.gateways);
   await show(page.getByRole("heading", { name: "Artifact manifest" }));
-  await page.getByRole("button", { name: /Resolve now/ }).click();
-  await page.getByText(/resolves to/).waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: /Resolve now/ }).click();
+    await page.getByText(/resolves to/).waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.ipns);
   const history = page.locator(".card").filter({ hasText: "Publication history" });
   await show(history);
-  const publications = history.locator("tbody tr");
-  for (let row = 0; row < (await publications.count()); row += 1) {
-    const check = publications.nth(row).getByRole("button", { name: "check root" });
-    if ((await check.count()) > 0) await check.click();
-  }
-  await page.waitForFunction(() => !document.body.textContent?.includes("checking…"), undefined, {
-    timeout: DATA_TIMEOUT_MS,
+  await quickly(async () => {
+    const publications = history.locator("tbody tr");
+    for (let row = 0; row < (await publications.count()); row += 1) {
+      const check = publications.nth(row).getByRole("button", { name: "check root" });
+      if ((await check.count()) > 0) await check.click();
+    }
+    await page.waitForFunction(() => !document.body.textContent?.includes("checking…"), undefined, {
+      timeout: DATA_TIMEOUT_MS,
+    });
   });
   await narrate(page, lines.history);
 
-  await open(page, "leads");
-  await page.getByLabel("Center on a place").selectOption(PLACE);
+  await quickly(() => open(page, "leads"));
   const results = page.locator(".card").filter({ hasText: "matches within" });
-  await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByLabel("Center on a place").selectOption(PLACE);
+    await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.agedRoofs);
   await show(results);
   await show(page.getByRole("tab", { name: "Aged roofs" }));
-  await page.getByRole("tab", { name: "Open roofing permits" }).click();
-  await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("tab", { name: "Open roofing permits" }).click();
+    await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.openPermits);
-  await page.getByLabel(/Also permits that expired/).check();
-  await page.getByLabel(/Only permits that list a contractor/).check();
-  await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
-  await page.waitForTimeout(SETTLE_MS);
+  await quickly(async () => {
+    await page.getByLabel(/Also permits that expired/).check();
+    await page.getByLabel(/Only permits that list a contractor/).check();
+    await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+    await page.waitForTimeout(SETTLE_MS);
+  });
   await show(results);
   await narrate(page, lines.neverFinished);
   await results
@@ -221,28 +238,36 @@ async function record() {
   await page.waitForTimeout(SETTLE_MS);
   await narrate(page, lines.permitDetail);
 
-  await open(page, "agent");
+  await quickly(() => open(page, "agent"));
   await narrate(page, lines.agent);
   await page.getByLabel("Question").fill(AGENT_QUESTION);
-  await page.getByRole("button", { name: "Ask" }).click();
-  await page.locator(".bubble.agent").first().waitFor({ timeout: AGENT_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: "Ask" }).click();
+    await page.locator(".bubble.agent").first().waitFor({ timeout: AGENT_TIMEOUT_MS });
+  });
   await show(page.locator(".evidence").first());
   await show(page.locator(".bubble.agent").first());
   await narrate(page, lines.agentAnswer);
   await narrate(page, lines.followUp);
   await page.getByLabel("Question").fill(FOLLOW_UP);
-  await page.getByRole("button", { name: "Ask" }).click();
-  await page.locator(".bubble.agent").nth(1).waitFor({ timeout: AGENT_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: "Ask" }).click();
+    await page.locator(".bubble.agent").nth(1).waitFor({ timeout: AGENT_TIMEOUT_MS });
+  });
   await show(page.locator(".turn").nth(1));
   await show(page.locator(".bubble.agent").nth(1));
   await narrate(page, lines.followUpAnswer);
 
-  await open(page, "mcp");
-  await page.locator(".facts").getByText("travis-oracle").waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await open(page, "mcp");
+    await page.locator(".facts").getByText("travis-oracle").waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.mcpSession);
   await page.getByRole("button", { name: /find_open_roofing_permits/ }).click();
-  await page.getByRole("button", { name: "Call tool" }).click();
-  await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  await quickly(async () => {
+    await page.getByRole("button", { name: "Call tool" }).click();
+    await page.locator(".data-table tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
+  });
   await narrate(page, lines.mcpCall);
   const request = page.locator(".rpc-log li").filter({ hasText: "tools/call" }).last();
   await request.getByText("message").click();

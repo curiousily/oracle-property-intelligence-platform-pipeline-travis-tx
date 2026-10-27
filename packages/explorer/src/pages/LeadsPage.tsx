@@ -8,8 +8,10 @@ import { LeadsMap, type MapCenter, type MapPoint } from "../map/LeadsMap.js";
 import { datasetInfo } from "./dataset-info.js";
 
 enum LeadKind {
+  TopLeads = "top_leads",
   AgedRoofs = "aged_roofs",
   OpenPermits = "open_permits",
+  HailHit = "hail_hit",
   LongHeld = "long_held",
   OutOfArea = "out_of_area",
 }
@@ -17,11 +19,27 @@ enum LeadKind {
 const LEAD_KINDS: { kind: LeadKind; label: string; tool: string }[] = [
   { kind: LeadKind.AgedRoofs, label: "Aged roofs", tool: "find_aged_roofs" },
   { kind: LeadKind.OpenPermits, label: "Open roofing permits", tool: "find_open_roofing_permits" },
+  { kind: LeadKind.HailHit, label: "Hail on current roof", tool: "find_hail_hit_roofs" },
+  { kind: LeadKind.TopLeads, label: "Top leads", tool: "find_top_leads" },
   { kind: LeadKind.LongHeld, label: "Long-held properties", tool: "find_long_held_properties" },
   { kind: LeadKind.OutOfArea, label: "Out-of-area owners", tool: "find_out_of_area_owners" },
 ];
 
 const COLUMNS: Record<LeadKind, string[]> = {
+  [LeadKind.TopLeads]: [
+    "situs_address",
+    "lead_score",
+    "roof_points",
+    "permit_points",
+    "hail_points",
+    "roof_age_years",
+    "roof_age_confidence",
+    "max_years_open",
+    "max_hail_inches",
+    "last_hail_date",
+    "distance_miles",
+    "prop_id",
+  ],
   [LeadKind.AgedRoofs]: [
     "situs_address",
     "roof_age_years",
@@ -46,6 +64,18 @@ const COLUMNS: Record<LeadKind, string[]> = {
     "bbb_snapshot_date",
     "distance_miles",
     "source_url",
+  ],
+  [LeadKind.HailHit]: [
+    "situs_address",
+    "max_hail_inches",
+    "last_hail_date",
+    "hail_reports",
+    "roof_age_years",
+    "roof_age_anchor",
+    "roof_age_anchor_date",
+    "distance_miles",
+    "hail_source_url",
+    "prop_id",
   ],
   [LeadKind.LongHeld]: [
     "situs_address",
@@ -77,6 +107,10 @@ const MAP_ROWS = 200;
 const DEFAULT_ROOF_AGE = 15;
 const DEFAULT_YEARS_OPEN = 5;
 const DEFAULT_OWNERSHIP_YEARS = 10;
+const DEFAULT_HAIL_INCHES = 1;
+const DEFAULT_HAIL_YEARS = 3;
+const HAIL_INCHES_STEP = 0.25;
+const MAX_HAIL_YEARS = 25;
 const EARLIEST_PERMIT_YEAR = 1900;
 const DETAIL_HIDDEN = new Set(["source_run_id"]);
 const SEARCH_AREA = { south: 29, north: 31, west: -99, east: -96 };
@@ -103,6 +137,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
   const [withContractor, setWithContractor] = useState(false);
   const [issuedSince, setIssuedSince] = useState<number>();
   const [ownershipYears, setOwnershipYears] = useState(DEFAULT_OWNERSHIP_YEARS);
+  const [hailInches, setHailInches] = useState(DEFAULT_HAIL_INCHES);
+  const [hailYears, setHailYears] = useState(DEFAULT_HAIL_YEARS);
   const [result, setResult] = useState<ToolResult>();
   const [error, setError] = useState<string>();
   const [running, setRunning] = useState(false);
@@ -118,6 +154,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
       limit: MAP_ROWS,
     };
     switch (kind) {
+      case LeadKind.TopLeads:
+        return { ...near, min_hail_inches: hailInches, within_years: hailYears };
       case LeadKind.AgedRoofs:
         return { ...near, min_roof_age_years: roofAge, min_confidence: confidence };
       case LeadKind.OpenPermits:
@@ -129,6 +167,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
           with_contractor: withContractor,
           ...(issuedSince && { issued_since_year: issuedSince }),
         };
+      case LeadKind.HailHit:
+        return { ...near, min_hail_inches: hailInches, within_years: hailYears };
       case LeadKind.LongHeld:
         return { ...near, min_ownership_years: ownershipYears };
       case LeadKind.OutOfArea:
@@ -146,6 +186,8 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
     withContractor,
     issuedSince,
     ownershipYears,
+    hailInches,
+    hailYears,
   ]);
 
   useEffect(() => {
@@ -161,6 +203,7 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
       },
       (failure: unknown) => {
         if (!active) return;
+        setResult(undefined);
         setError(failure instanceof Error ? failure.message : String(failure));
         setRunning(false);
       },
@@ -338,6 +381,42 @@ export function LeadsPage({ dataset, database }: { dataset: Dataset; database: D
                     }
                   />
                 </label>
+              </>
+            )}
+            {kind === LeadKind.TopLeads && (
+              <p className="muted small">
+                Score 0–100: roof points (up to 40) for roof age beyond 15 years, weighted by its
+                confidence; permit points (up to 30) for years a roofing permit stayed unfinished;
+                hail points (up to 30) for the largest hail of an inch or more on the current roof
+                in the last {hailYears} years.
+              </p>
+            )}
+            {kind === LeadKind.HailHit && (
+              <>
+                <label>
+                  Hail at least (inches)
+                  <input
+                    type="number"
+                    min={0}
+                    step={HAIL_INCHES_STEP}
+                    value={hailInches}
+                    onChange={(event) => setHailInches(Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  Reported in the last (years)
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_HAIL_YEARS}
+                    value={hailYears}
+                    onChange={(event) => setHailYears(Number(event.target.value))}
+                  />
+                </label>
+                <p className="muted small">
+                  NOAA Storm Events hail reports within 2 miles, after the roof's anchor date.
+                  Unreported hail is missing.
+                </p>
               </>
             )}
             {kind === LeadKind.LongHeld && (

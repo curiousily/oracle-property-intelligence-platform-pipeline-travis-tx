@@ -53,13 +53,23 @@ test("finds aged roofs and long-open roofing permits within a radius", async ({ 
   await page.screenshot({ path: `${SCREENSHOTS}/leads.png`, fullPage: true });
 });
 
+test("finds roofs that took reported hail after they went on", async ({ page }) => {
+  await open(page, "leads");
+
+  await page.getByRole("tab", { name: "Hail on current roof" }).click();
+
+  const results = page.locator(".card").filter({ hasText: "matches within" });
+  await expect(results).toContainText(/[\d,]+ matches within 5 miles of Austin/);
+  await expect(results.locator("thead")).toContainText("max_hail_inches");
+});
+
 test("runs SQL in DuckDB-WASM over the published Parquet tables", async ({ page }) => {
   await open(page, "sql");
 
   await page.getByRole("button", { name: "Run query" }).click();
 
-  await expect(page.locator(".data-table tbody tr")).toHaveCount(5);
-  await expect(page.locator(".data-table")).toContainText("businesses");
+  await expect(page.locator(".data-table tbody tr")).toHaveCount(6);
+  await expect(page.locator(".data-table")).toContainText("hail events");
 
   await page.getByRole("button", { name: "Roofing contractors in the Texas registry" }).click();
   await expect(page.locator(".data-table thead")).toContainText("registry_name");

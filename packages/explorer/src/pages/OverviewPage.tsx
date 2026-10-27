@@ -61,6 +61,8 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
   const contractors = coverage.contractors ?? {};
   const permits = coverage.permits ?? {};
   const businesses = coverage.businesses;
+  const hail = coverage.hail_events;
+  const hailYears = Object.keys((hail?.by_year ?? {}) as Record<string, number>).sort();
   const count = (group: Coverage[string], key: string) => Number(group[key] ?? 0);
   const registryDetail =
     contractors.with_registry_match === undefined
@@ -195,6 +197,15 @@ export function OverviewPage({ dataset }: { dataset: Dataset }) {
                 detail={`Travis County locations with an active Texas sales tax permit; ${formatCount(count(businesses, "with_property"))} linked to a TCAD property, ${formatCount(count(businesses, "with_coordinates"))} located`}
                 source="tx-sales-tax-permits"
                 run={latestRun("tx-sales-tax-permits")}
+              />
+            )}
+            {hail && (
+              <KindRow
+                kind="Hail report"
+                records={count(hail, "rows")}
+                detail={`NOAA Storm Events hail reports around Travis County, ${hailYears[0]}–${hailYears.at(-1)}; ${formatCount(count(hail, "one_inch_or_larger"))} one inch or larger`}
+                source="noaa-storm-events"
+                run={lastChange("noaa-storm-events")}
               />
             )}
             <KindRow

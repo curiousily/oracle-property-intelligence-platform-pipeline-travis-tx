@@ -22,6 +22,14 @@ const EXAMPLE_INPUTS: Record<string, object> = {
     min_years_open: 5,
     limit: 10,
   },
+  find_hail_hit_roofs: {
+    place: "78704",
+    radius_miles: 5,
+    min_hail_inches: 1,
+    within_years: 3,
+    limit: 10,
+  },
+  find_top_leads: { place: "Rollingwood", radius_miles: 5, limit: 10 },
   property_details: { prop_id: 100036 },
   contractor_details: { name: "roof" },
   find_long_held_properties: {

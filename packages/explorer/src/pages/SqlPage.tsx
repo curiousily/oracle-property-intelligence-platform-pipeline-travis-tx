@@ -12,7 +12,8 @@ const EXAMPLES: { label: string; sql: string }[] = [
 UNION ALL SELECT 'roofing_permits', count(*) FROM roofing_permits
 UNION ALL SELECT 'contractors', count(*) FROM contractors
 UNION ALL SELECT 'permits', count(*) FROM permits
-UNION ALL SELECT 'businesses', count(*) FROM businesses`,
+UNION ALL SELECT 'businesses', count(*) FROM businesses
+UNION ALL SELECT 'hail_events', count(*) FROM hail_events`,
   },
   {
     label: "Roof-age basis",
@@ -56,6 +57,15 @@ FROM businesses
 WHERE naics_code = '238160'
 ORDER BY permit_issue_date
 LIMIT 25`,
+  },
+  {
+    label: "Hail reports by year",
+    sql: `SELECT year(event_date) AS year, count(*) AS reports,
+       count(*) FILTER (WHERE magnitude_inches >= 1) AS one_inch_or_larger,
+       max(magnitude_inches) AS largest_inches
+FROM hail_events
+GROUP BY 1
+ORDER BY 1 DESC`,
   },
   {
     label: "Owners by locality",
