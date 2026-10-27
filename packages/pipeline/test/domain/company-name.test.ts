@@ -26,6 +26,13 @@ describe("phoneKey", () => {
     expect(phoneKey("+1 512.555.0142")).toBe("5125550142");
   });
 
+  it.each(["512-550-0000", "(512) 555-5555", "000-000-0000", "123-456-7890", "999.999.9999"])(
+    "has no key for the placeholder number %s, which would link unrelated businesses",
+    (placeholder) => {
+      expect(phoneKey(placeholder)).toBeUndefined();
+    },
+  );
+
   it("has no key for too short a number", () => {
     expect(phoneKey("555-0142")).toBeUndefined();
     expect(phoneKey(undefined)).toBeUndefined();
