@@ -11,7 +11,8 @@ const LONG_READ_MS = 7_000;
 const SETTLE_MS = 1_500;
 const DATA_TIMEOUT_MS = 120_000;
 const AGENT_TIMEOUT_MS = 180_000;
-const PLACE = "Pflugerville";
+const PLACE = "Rollingwood";
+const AGENT_PLACE = "West Lake Hills";
 
 const CAPTION_SCRIPT = `
   window.demoCaption = (title, body) => {
@@ -184,14 +185,25 @@ async function record() {
   await caption(
     page,
     "Open roofing permits, longest open first",
-    "Never-finished roofing permits with status, years open, contractor and BBB grade, linked to the city's permit record.",
+    "Permits that are still open five years or more, with years open, contractor and BBB grade, linked to the city's permit record.",
     LONG_READ_MS,
   );
-  await page.getByLabel(/Issued in or after/).fill("2005");
+  await page.getByLabel(/Also permits that expired/).check();
+  await page.getByLabel(/Only permits that list a contractor/).check();
   await results.locator("tbody tr").first().waitFor({ timeout: DATA_TIMEOUT_MS });
   await page.waitForTimeout(SETTLE_MS);
   await show(results);
-  await results.locator("tbody tr").first().click();
+  await caption(
+    page,
+    "Never finished, with a listed contractor",
+    "Adding permits that expired without a final inspection, and keeping those that list a contractor, brings in archived BBB grades.",
+    LONG_READ_MS,
+  );
+  const graded = results
+    .locator("tbody tr")
+    .filter({ hasText: /\bA\+|\bA-|\bB\+/ })
+    .first();
+  await graded.click();
   await page.waitForTimeout(SETTLE_MS);
   await caption(
     page,
@@ -206,7 +218,12 @@ async function record() {
     "The same questions through the agent",
     "A Workers AI model picks the query tools; the tools run in this browser over the published dataset, and every answer shows its evidence.",
   );
-  await page.getByRole("button", { name: /Pflugerville have roofs older than 15 years/ }).click();
+  await page
+    .getByLabel("Question")
+    .fill(
+      `Which properties in Travis County within five miles of ${AGENT_PLACE} have roofs older than 15 years?`,
+    );
+  await page.getByRole("button", { name: "Ask" }).click();
   await page.locator(".bubble.agent").first().waitFor({ timeout: AGENT_TIMEOUT_MS });
   await show(page.locator(".evidence").first());
   await page.waitForTimeout(READ_MS);
@@ -236,7 +253,7 @@ async function record() {
   await caption(
     page,
     "Answer to the follow-up",
-    "The agent reuses the area, filters permits open five years or more, lists contractors and BBB grades, and names the gaps.",
+    "The agent reuses the area, keeps permits still open five years or more that list a contractor, and states what the matches lack.",
     LONG_READ_MS,
   );
 
