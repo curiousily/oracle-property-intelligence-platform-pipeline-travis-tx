@@ -29,14 +29,17 @@ const EXAMPLE_INPUTS: Record<string, object> = {
   dataset_summary: {},
 };
 const MCP_SETUP = `git clone ${REPOSITORY_URL}
-cd oracle-property-intelligence-platform-pipeline-travis-tx
-git checkout travis-pipeline && npm ci
+cd oracle-property-intelligence-platform-pipeline-travis-tx && npm ci
 
 # Claude Code
 claude mcp add travis-oracle -- npm run --silent mcp --prefix "$PWD"
 
-# Any MCP client (stdio)
-npm run --silent mcp`;
+# Any MCP client: stdio command
+npm run --silent mcp
+
+# Optional environment
+TRAVIS_ORACLE_GATEWAY=https://ipfs.orbitor.dev   # read the Parquet tables straight from public IPFS
+TRAVIS_ORACLE_ROOT_CID=<dataset root CID>        # pin any published snapshot instead of the latest`;
 
 export function McpPage({ dataset, database }: { dataset: Dataset; database: Database }) {
   const [tool, setTool] = useState(SCHEMAS[0]?.name ?? "");

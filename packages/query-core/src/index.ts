@@ -6,6 +6,8 @@ export {
   type Row,
   runTool,
   type SqlRunner,
+  TABLES,
+  type TableName,
   TOOLS,
   type ToolContext,
   type ToolResult,

@@ -1,10 +1,8 @@
 import * as duckdb from "@duckdb/duckdb-wasm";
-import type { Row, SqlRunner } from "@travis-oracle/query-core";
+import { type Row, type SqlRunner, TABLES } from "@travis-oracle/query-core";
 import { DataType, type Field, type Table } from "apache-arrow";
 import type { Dataset } from "./dataset.js";
 
-export const TABLES = ["properties", "roofing_permits", "contractors", "permits"] as const;
-export type TableName = (typeof TABLES)[number];
 
 export interface Database extends SqlRunner {
   query(sql: string): Promise<QueryResult>;

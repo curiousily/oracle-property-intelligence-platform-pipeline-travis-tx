@@ -1,0 +1,16 @@
+{
+  "name": "@travis-oracle/mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^2.0.0-r.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@travis-oracle/query-core": "*",
+    "zod": "^4.6.7"
+  }
+}

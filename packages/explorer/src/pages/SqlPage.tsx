@@ -1,7 +1,8 @@
+import { TABLES } from "@travis-oracle/query-core";
 import { useState } from "react";
 import { Card, Cid, DataTable, ErrorNote, Spinner } from "../components/ui.js";
 import type { Dataset } from "../data/dataset.js";
-import { type Database, type QueryResult, TABLES } from "../data/duckdb.js";
+import type { Database, QueryResult } from "../data/duckdb.js";
 import { formatCount } from "../format.js";
 
 const EXAMPLES: { label: string; sql: string }[] = [

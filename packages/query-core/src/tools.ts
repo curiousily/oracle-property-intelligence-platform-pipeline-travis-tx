@@ -5,6 +5,9 @@ import { type Center, distanceMiles, list, literal, withinBox } from "./sql.js";
 
 export type Row = Record<string, unknown>;
 
+export const TABLES = ["properties", "roofing_permits", "contractors", "permits"] as const;
+export type TableName = (typeof TABLES)[number];
+
 export interface SqlRunner {
   all(sql: string): Promise<Row[]>;
 }
