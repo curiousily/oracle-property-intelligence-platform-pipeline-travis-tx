@@ -1,3 +1,5 @@
+import type { BbbMatch } from "../domain/bbb-match.js";
+import type { BbbProfile } from "../domain/bbb-profile.js";
 import type { MailingAddress, OwnerLocality } from "../domain/owner-signals.js";
 import type { PermitDates, PermitLifecycle } from "../domain/permit-lifecycle.js";
 import type { RoofAgeEstimate, RoofPermitEvidence } from "../domain/roof-age.js";
@@ -8,6 +10,7 @@ export interface BuildInputs {
   appraisalTablesDir: string;
   parcelPages: string;
   addressPointPages?: string;
+  bbbProfiles?: string;
 }
 
 export interface PermitCandidate extends PermitFacts, PermitDates {
@@ -73,5 +76,7 @@ export interface LeadWarehouse {
   saveOwnerSignals(rows: readonly OwnerSignals[]): Promise<void>;
   contractorNames(): Promise<ContractorName[]>;
   saveContractorKeys(rows: readonly ContractorKey[]): Promise<void>;
+  bbbProfiles(): Promise<BbbProfile[]>;
+  saveBbbMatches(rows: readonly BbbMatch[]): Promise<void>;
   exportTables(outputDir: string, previousDir: string | undefined): Promise<TableSummary[]>;
 }

@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { Confidence } from "../../src/domain/confidence.js";
 import { PermitState } from "../../src/domain/permit-state.js";
-import {
-  Confidence,
-  estimateRoofAge,
-  RoofAnchor,
-  type RoofPermitEvidence,
-} from "../../src/domain/roof-age.js";
+import { estimateRoofAge, RoofAnchor, type RoofPermitEvidence } from "../../src/domain/roof-age.js";
 import { RoofWork } from "../../src/domain/roof-work.js";
 
 const AS_OF = "2026-10-27";

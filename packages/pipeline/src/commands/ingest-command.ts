@@ -1,18 +1,23 @@
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { ingestBbbArchive } from "../application/ingest-bbb-archive.js";
 import { ingestSnapshot } from "../application/ingest-snapshot.js";
 import { ingestSource } from "../application/ingest-source.js";
 import { ingestTcadExport } from "../application/ingest-tcad-export.js";
 import { type IngestWindow, WindowKind } from "../domain/ingest-window.js";
 import { SourceId } from "../domain/source-id.js";
 import { ArcGisFeatureLayer, FeatureGeometry } from "../infrastructure/arcgis-feature-layer.js";
+import { BbbStateParser } from "../infrastructure/bbb-state-parser.js";
 import { DuckDbFixedWidthTransformer } from "../infrastructure/duckdb-fixed-width-transformer.js";
 import { FileArtifactPaths } from "../infrastructure/file-artifact-paths.js";
 import { FileRawStore } from "../infrastructure/file-raw-store.js";
 import { HttpFileDownloader } from "../infrastructure/http-file-downloader.js";
 import { JsonWatermarkStore } from "../infrastructure/json-watermark-store.js";
+import { NdjsonBbbArchiveStore } from "../infrastructure/ndjson-bbb-archive-store.js";
 import { SocrataPermitSource } from "../infrastructure/socrata-permit-source.js";
 import { TcadExportCatalogPage } from "../infrastructure/tcad-export-catalog-page.js";
 import { UnzipMemberExtractor } from "../infrastructure/unzip-member-extractor.js";
+import { WaybackCdxIndex, WaybackSnapshotFetcher } from "../infrastructure/wayback.js";
 import { resilientFetch, STATE_DIR, USER_AGENT, WORK_DIR } from "./settings.js";
 
 const AUSTIN_OPEN_DATA_URL = "https://data.austintexas.gov";
@@ -37,6 +42,14 @@ const TRAVIS_ADDRESS_POINTS_FIELDS = [
   "ADDRESS_SUFFIX",
   "FULL_STREET_NAME",
 ];
+const BBB_STATE = "tx";
+const BBB_CATEGORIES = [
+  "roofing-contractors",
+  "general-contractor",
+  "home-builders",
+  "siding-contractors",
+];
+const WAYBACK_REQUEST_INTERVAL_MS = 1_000;
 const ARCGIS_PAGE_SIZE = 2_000;
 const SOCRATA_PAGE_SIZE = 50_000;
 
@@ -133,6 +146,23 @@ export async function runIngest(
           watermarks,
         },
         { runId },
+      );
+    case SourceId.BbbArchive:
+      return ingestBbbArchive(
+        {
+          index: new WaybackCdxIndex({ userAgent: USER_AGENT, fetch: resilientFetch }),
+          snapshots: new WaybackSnapshotFetcher({
+            userAgent: USER_AGENT,
+            minIntervalMs: WAYBACK_REQUEST_INTERVAL_MS,
+            fetch: resilientFetch,
+            sleep: (milliseconds) => delay(milliseconds),
+            now,
+          }),
+          parser: new BbbStateParser(),
+          store: new NdjsonBbbArchiveStore(dataDir),
+          watermarks,
+        },
+        { runId, state: BBB_STATE, categories: BBB_CATEGORIES },
       );
   }
 }

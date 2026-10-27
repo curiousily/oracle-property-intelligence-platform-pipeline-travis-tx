@@ -1,3 +1,4 @@
+import { Confidence } from "./confidence.js";
 import { isPlausibleDate, isPlausibleYear, wholeYearsBetween, yearOf } from "./iso-date.js";
 import { PermitState } from "./permit-state.js";
 import { RoofWork } from "./roof-work.js";
@@ -6,12 +7,6 @@ export enum RoofAnchor {
   CompletedReplacement = "completed_replacement",
   NewConstruction = "new_construction",
   YearBuilt = "year_built",
-}
-
-export enum Confidence {
-  High = "high",
-  Medium = "medium",
-  Low = "low",
 }
 
 export interface RoofPermitEvidence {

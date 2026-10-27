@@ -7,6 +7,7 @@ export const USER_AGENT = `travis-oracle-pipeline/0.1 (+https://github.com/${REP
 export const STATE_DIR = "state";
 export const WORK_DIR = "work";
 export const BUILD_DIR = "build";
+export const BUILD_STAGING_DIR = "build-staging";
 export const PUBLISH_DIR = "publish";
 export const PUBLISHED_HISTORY_FILE = "published/history.json";
 export const BUILD_RESULT_FILE = "build.json";

@@ -157,6 +157,37 @@ const ADDRESS_POINTS = parcelPage([
   },
 ]);
 
+const RELIABLE_PROFILE_URL =
+  "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/reliable-roofing-0825-1";
+const bbbRecord = (timestamp: string, rating: string | null) => ({
+  profileId: "0825-1",
+  capture: { profileId: "0825-1", originalUrl: RELIABLE_PROFILE_URL, timestamp },
+  profile:
+    rating === null
+      ? null
+      : {
+          profileId: "0825-1",
+          name: "Reliable Roofing, Inc.",
+          alternateNames: [],
+          phones: ["(512) 555-0142"],
+          city: "Austin",
+          state: "TX",
+          zip: "78704",
+          rating,
+          accredited: true,
+          accreditedSince: "2014-05-20",
+          outOfBusiness: false,
+          profileUrl: RELIABLE_PROFILE_URL,
+          snapshotUrl: `https://web.archive.org/web/${timestamp}/${RELIABLE_PROFILE_URL}`,
+          snapshotAt: `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}T00:00:00Z`,
+        },
+});
+const BBB_RECORDS = [
+  bbbRecord("20190101000000", "B"),
+  bbbRecord("20260710000000", "A+"),
+  bbbRecord("20260801000000", null),
+];
+
 async function writeGzipJson(path: string, value: unknown) {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, gzipSync(JSON.stringify(value)));
@@ -248,19 +279,32 @@ beforeAll(async () => {
   );
   const appraisalTablesDir = join(dataDir, "tables", "tcad-appraisal-export", APPRAISAL_RUN);
   await writeAppraisalTables(appraisalTablesDir);
+  const bbbDir = join(dataDir, "raw", "bbb-archive", PARCEL_RUN);
+  await mkdir(bbbDir, { recursive: true });
+  await writeFile(
+    join(bbbDir, "profiles.ndjson"),
+    BBB_RECORDS.map((record) => `${JSON.stringify(record)}\n`).join(""),
+  );
 
   inputs = {
     permitPages: join(permitsDir, "*", "page-*.json.gz"),
     appraisalTablesDir,
     parcelPages: join(dataDir, "raw", "tcad-parcels", PARCEL_RUN, "page-*.json.gz"),
     addressPointPages: join(dataDir, "raw", "travis-address-points", PARCEL_RUN, "page-*.json.gz"),
+    bbbProfiles: join(dataDir, "raw", "bbb-archive", "*", "profiles.ndjson"),
   };
   result = await build("build-1");
 });
 
 describe("DuckDbLeadWarehouse", () => {
   it("counts the latest permit versions, the county's real property and its parcels", () => {
-    expect(result.sourceRows).toEqual({ permits: 7, properties: 6, parcels: 3, addressPoints: 3 });
+    expect(result.sourceRows).toEqual({
+      permits: 7,
+      properties: 6,
+      parcels: 3,
+      addressPoints: 3,
+      bbbProfiles: 1,
+    });
   });
 
   it("keeps the latest version of every permit with its source run", async () => {
@@ -456,6 +500,37 @@ describe("DuckDbLeadWarehouse", () => {
     expect(agedRoofs[1]).toContain("100012");
   });
 
+  it("carries the latest archived BBB grade onto the contractor and its roofing permits", async () => {
+    const [contractor] = await readTable("build-1", "contractors", "contractor_key");
+    expect(contractor).toMatchObject({
+      contractor_key: "reliable roofing",
+      bbb_rating: "A+",
+      bbb_accredited: true,
+      bbb_business_name: "Reliable Roofing, Inc.",
+      bbb_profile_url: RELIABLE_PROFILE_URL,
+      bbb_snapshot_url: `https://web.archive.org/web/20260710000000/${RELIABLE_PROFILE_URL}`,
+      bbb_snapshot_date: "2026-07-10",
+      bbb_match_method: "name_and_phone",
+      bbb_match_confidence: "high",
+    });
+
+    const roofing = await readTable("build-1", "roofing_permits", "permit_number");
+    expect(roofing.find((row) => row.permit_number === "2016-023376 BP")).toMatchObject({
+      bbb_rating: "A+",
+      bbb_snapshot_date: "2026-07-10",
+    });
+    expect(roofing.find((row) => row.permit_number === "2020-000005 BP")?.bbb_rating).toBeNull();
+
+    const coverage = JSON.parse(
+      await readFile(join(dataDir, "build", "build-1", "coverage.json"), "utf8"),
+    );
+    expect(coverage.contractors).toMatchObject({
+      rows: 1,
+      with_bbb_rating: 1,
+      bbb_match_method: { name_and_phone: 1 },
+    });
+  });
+
   it("reports every row as added on the first build", () => {
     expect(result.tables).toEqual(
       expect.arrayContaining([
@@ -471,6 +546,21 @@ describe("DuckDbLeadWarehouse", () => {
     for (const table of rebuilt.tables) {
       expect(table).toMatchObject({ added: 0, changed: 0, removed: 0 });
     }
+  });
+
+  it("compares against a previous build written before a column was added", async () => {
+    const previousDir = join(dataDir, "build", "build-before-bbb");
+    await mkdir(previousDir, { recursive: true });
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(
+      `COPY (SELECT * EXCLUDE (bbb_rating, bbb_match_method) FROM '${join(dataDir, "build", "build-1", "contractors.parquet")}') TO '${join(previousDir, "contractors.parquet")}' (FORMAT parquet)`,
+    );
+
+    const rebuilt = await build("build-after-bbb", "build-before-bbb");
+
+    expect(rebuilt.tables).toEqual(
+      expect.arrayContaining([{ table: "contractors", rows: 1, added: 0, changed: 0, removed: 0 }]),
+    );
   });
 
   it("does not count a re-fetch of identical permits as a change", async () => {

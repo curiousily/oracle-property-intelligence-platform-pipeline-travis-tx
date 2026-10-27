@@ -1,3 +1,4 @@
+import { type ContractorIdentity, matchContractorsToBbb } from "../domain/bbb-match.js";
 import { companyKey, phoneKey } from "../domain/company-name.js";
 import { ownerLocality, ownershipYears } from "../domain/owner-signals.js";
 import { permitLifecycle } from "../domain/permit-lifecycle.js";
@@ -29,6 +30,7 @@ export interface BuildResult {
   roofWork: Record<string, number>;
   roofAgeConfidence: Record<string, number>;
   ownerLocality: Record<string, number>;
+  bbbMatches: Record<string, number>;
   tables: TableSummary[];
 }
 
@@ -74,6 +76,12 @@ export async function buildLeadTables(
   );
   await warehouse.saveContractorKeys(contractorKeys);
 
+  const bbbMatches = matchContractorsToBbb(
+    contractorIdentities(contractorKeys),
+    await warehouse.bbbProfiles(),
+  );
+  await warehouse.saveBbbMatches(bbbMatches);
+
   const tables = await warehouse.exportTables(outputDir, previousDir);
 
   return {
@@ -84,8 +92,22 @@ export async function buildLeadTables(
     roofWork: countBy(classified, (permit) => permit.roofWork),
     roofAgeConfidence: countBy(roofAges, (roofAge) => roofAge.confidence),
     ownerLocality: countBy(owners, (owner) => owner.locality),
+    bbbMatches: countBy(bbbMatches, (match) => match.method),
     tables,
   };
+}
+
+function contractorIdentities(keys: readonly ContractorKey[]): ContractorIdentity[] {
+  const phones = new Map<string, Set<string>>();
+  for (const { contractorKey, phoneKey: phone } of keys) {
+    const known = phones.get(contractorKey) ?? new Set<string>();
+    if (phone) known.add(phone);
+    phones.set(contractorKey, known);
+  }
+  return [...phones].map(([contractorKey, phoneKeys]) => ({
+    contractorKey,
+    phoneKeys: [...phoneKeys],
+  }));
 }
 
 function countBy<T>(items: readonly T[], keyOf: (item: T) => string): Record<string, number> {

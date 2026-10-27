@@ -14,6 +14,9 @@ import type {
   PropertyRoofEvidence,
   TableSummary,
 } from "../application/lead-build-ports.js";
+import type { BbbMatch } from "../domain/bbb-match.js";
+import { type BbbProfile, bbbRatingOf } from "../domain/bbb-profile.js";
+import { Confidence } from "../domain/confidence.js";
 import { CoordinateSource } from "../domain/coordinate-source.js";
 import {
   AGED_ROOF_YEARS,
@@ -22,7 +25,6 @@ import {
 } from "../domain/lead-thresholds.js";
 import { PermitLinkStatus } from "../domain/permit-link.js";
 import type { PermitState } from "../domain/permit-state.js";
-import { Confidence } from "../domain/roof-age.js";
 import { ROOF_AGE_EVIDENCE, ROOFING_WORK, type RoofWork } from "../domain/roof-work.js";
 import { SourceId } from "../domain/source-id.js";
 import { MAX_ADDRESS_POINT_SPREAD_DEGREES, STREET_TYPE_ALIASES } from "../domain/street-address.js";
@@ -40,6 +42,7 @@ const BUILDING_PERMIT = "BP";
 const CANDIDATE_WORK_CLASSES = ["new", "roof"];
 const RAW_RUN_ID = String.raw`/(\d{8}T\d{6}Z)/page-`;
 const ISO_DATE = "%Y-%m-%d";
+const ISO_DATE_LENGTH = "YYYY-MM-DD".length;
 const COVERAGE_FILE = "coverage.json";
 const SAMPLES_DIR = "samples";
 const LONG_OPEN_SAMPLE_FILE = "long-open-roofing-permits.csv";
@@ -99,9 +102,12 @@ const PERMIT_COLUMNS = {
   link: "STRUCT(url VARCHAR)",
 };
 
+const COORDINATE_DECIMALS = 7;
 const TRAVIS_COUNTY_BOUNDS = { south: 29.9, north: 30.7, west: -98.3, east: -97.3 };
 const ADDRESS_POINT_FEATURES =
   "STRUCT(attributes STRUCT(ADDRESS BIGINT, PREFIX_DIRECTION VARCHAR, STREET_NAME VARCHAR, STREET_TYPE VARCHAR), geometry STRUCT(x DOUBLE, y DOUBLE))[]";
+const BBB_PROFILE =
+  "STRUCT(profileId VARCHAR, name VARCHAR, alternateNames VARCHAR[], phones VARCHAR[], city VARCHAR, state VARCHAR, zip VARCHAR, rating VARCHAR, accredited BOOLEAN, accreditedSince VARCHAR, outOfBusiness BOOLEAN, profileUrl VARCHAR, snapshotUrl VARCHAR, snapshotAt VARCHAR)";
 const PARCEL_FEATURES =
   "STRUCT(attributes STRUCT(PROP_ID BIGINT, PID_10 VARCHAR, Shape__Area DOUBLE), centroid STRUCT(x DOUBLE, y DOUBLE))[]";
 
@@ -119,7 +125,13 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     this.connection.closeSync();
   }
 
-  async load({ permitPages, appraisalTablesDir, parcelPages, addressPointPages }: BuildInputs) {
+  async load({
+    permitPages,
+    appraisalTablesDir,
+    parcelPages,
+    addressPointPages,
+    bbbProfiles,
+  }: BuildInputs) {
     this.appraisalRunId = basename(appraisalTablesDir);
     const tcad = (table: TcadTable) => literal(join(appraisalTablesDir, `${table}.parquet`));
 
@@ -214,13 +226,33 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     `);
 
     await this.loadCoordinates(addressPointPages);
+    await this.loadBbbProfiles(bbbProfiles);
 
     return {
       permits: await this.count("permits"),
       properties: await this.count("tcad_properties"),
       parcels: await this.count("parcels"),
       addressPoints: await this.count("address_points"),
+      bbbProfiles: await this.count("bbb_profiles"),
     };
+  }
+
+  private async loadBbbProfiles(bbbProfiles: string | undefined): Promise<void> {
+    const records = bbbProfiles
+      ? `SELECT profile FROM read_json(${literal(bbbProfiles)}, format = 'newline_delimited', columns = {'profile': '${BBB_PROFILE}'})`
+      : `SELECT CAST(NULL AS ${BBB_PROFILE}) AS profile WHERE false`;
+    await this.connection.run(`
+      CREATE TABLE bbb_profiles AS
+      SELECT profile.profileId AS profile_id, profile.name AS business_name,
+        profile.alternateNames AS alternate_names, profile.phones AS phones,
+        profile.city AS city, profile.state AS state, profile.zip AS zip, profile.rating AS rating,
+        profile.accredited AS accredited, profile.accreditedSince AS accredited_since,
+        profile.outOfBusiness AS out_of_business, profile.profileUrl AS profile_url,
+        profile.snapshotUrl AS snapshot_url, profile.snapshotAt AS snapshot_at
+      FROM (${records})
+      WHERE profile IS NOT NULL
+      QUALIFY row_number() OVER (PARTITION BY profile.profileId ORDER BY profile.snapshotAt DESC) = 1;
+    `);
   }
 
   private async loadCoordinates(addressPointPages: string | undefined): Promise<void> {
@@ -247,7 +279,8 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
 
       CREATE TABLE address_point_keys AS
       SELECT ${addressKey("CAST(a.number AS VARCHAR)", "a.prefix", "a.street", "a.street_type")} AS address_key,
-        avg(a.latitude) AS latitude, avg(a.longitude) AS longitude
+        round(avg(a.latitude), ${COORDINATE_DECIMALS}) AS latitude,
+        round(avg(a.longitude), ${COORDINATE_DECIMALS}) AS longitude
       FROM address_points a LEFT JOIN street_type_aliases alias ON alias.variant = upper(trim(a.street_type))
       GROUP BY 1
       HAVING ${spread("a.latitude", "a.longitude")};
@@ -259,7 +292,8 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       WHERE p.situs_num IS NOT NULL AND p.situs_street IS NOT NULL;
 
       CREATE TABLE permit_coordinates AS
-      SELECT geo_id, avg(latitude) AS latitude, avg(longitude) AS longitude
+      SELECT geo_id, round(avg(latitude), ${COORDINATE_DECIMALS}) AS latitude,
+        round(avg(longitude), ${COORDINATE_DECIMALS}) AS longitude
       FROM permits
       WHERE geo_id IS NOT NULL
         AND latitude BETWEEN ${south} AND ${north} AND longitude BETWEEN ${west} AND ${east}
@@ -420,6 +454,38 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     });
   }
 
+  async bbbProfiles(): Promise<BbbProfile[]> {
+    const rows = await this.rows("SELECT * FROM bbb_profiles ORDER BY profile_id");
+    return rows.map((row) => ({
+      profileId: String(row.profile_id),
+      name: String(row.business_name),
+      alternateNames: (row.alternate_names as string[] | null) ?? [],
+      phones: (row.phones as string[] | null) ?? [],
+      city: text(row.city),
+      state: text(row.state),
+      zip: text(row.zip),
+      rating: bbbRatingOf(text(row.rating)),
+      accredited: row.accredited === true,
+      accreditedSince: text(row.accredited_since),
+      outOfBusiness: row.out_of_business === true,
+      profileUrl: String(row.profile_url),
+      snapshotUrl: String(row.snapshot_url),
+      snapshotAt: String(row.snapshot_at),
+    }));
+  }
+
+  async saveBbbMatches(rows: readonly BbbMatch[]): Promise<void> {
+    await this.connection.run(
+      "CREATE OR REPLACE TABLE bbb_matches (contractor_key VARCHAR, profile_id VARCHAR, match_method VARCHAR, match_confidence VARCHAR)",
+    );
+    await this.append("bbb_matches", rows, (appender, row) => {
+      appender.appendVarchar(row.contractorKey);
+      appender.appendVarchar(row.profileId);
+      appender.appendVarchar(row.method);
+      appender.appendVarchar(row.confidence);
+    });
+  }
+
   async exportTables(outputDir: string, previousDir: string | undefined): Promise<TableSummary[]> {
     await this.connection.run(`
       CREATE OR REPLACE VIEW export_permits AS
@@ -438,6 +504,8 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
           AS coordinate_source,
         coalesce(p.contractor_company_name, p.contractor_full_name) AS contractor_name,
         p.contractor_phone, k.contractor_key, p.contractor_trade,
+        bbb.rating AS bbb_rating, bbb.profile_url AS bbb_profile_url,
+        ${snapshotDate("bbb.snapshot_at")} AS bbb_snapshot_date, match.match_confidence AS bbb_match_confidence,
         p.project_id, p.master_permit_number, p.job_valuation, p.source_url,
         ${literal(SourceId.AustinPermits)} AS source, p.source_run_id
       FROM permits p
@@ -447,6 +515,8 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       LEFT JOIN contractor_keys k
         ON k.name IS NOT DISTINCT FROM coalesce(p.contractor_company_name, p.contractor_full_name)
         AND k.phone IS NOT DISTINCT FROM p.contractor_phone
+      LEFT JOIN bbb_matches match ON match.contractor_key = k.contractor_key
+      LEFT JOIN bbb_profiles bbb ON bbb.profile_id = match.profile_id
       WHERE w.roof_work IN (${list(ROOFING_WORK)});
 
       CREATE OR REPLACE VIEW export_properties AS
@@ -496,18 +566,27 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       LEFT JOIN property_coordinates located USING (prop_id);
 
       CREATE OR REPLACE VIEW export_contractors AS
-      SELECT contractor_key,
-        list(DISTINCT contractor_name ORDER BY contractor_name) AS names,
-        list(DISTINCT contractor_phone ORDER BY contractor_phone) FILTER (WHERE contractor_phone IS NOT NULL) AS phones,
-        count(*) AS roofing_permits,
-        count(*) FILTER (WHERE unfinished) AS unfinished_roofing_permits,
-        count(DISTINCT prop_id) AS properties,
-        min(issue_date) AS first_issue_date, max(issue_date) AS last_issue_date,
-        CAST(NULL AS VARCHAR) AS bbb_rating, CAST(NULL AS VARCHAR) AS bbb_profile_url,
-        CAST(NULL AS DATE) AS bbb_snapshot_date
-      FROM export_roofing_permits
-      WHERE contractor_key IS NOT NULL
-      GROUP BY 1;
+      WITH permit_history AS (
+        SELECT contractor_key,
+          list(DISTINCT contractor_name ORDER BY contractor_name) AS names,
+          list(DISTINCT contractor_phone ORDER BY contractor_phone) FILTER (WHERE contractor_phone IS NOT NULL) AS phones,
+          count(*) AS roofing_permits,
+          count(*) FILTER (WHERE unfinished) AS unfinished_roofing_permits,
+          count(DISTINCT prop_id) AS properties,
+          min(issue_date) AS first_issue_date, max(issue_date) AS last_issue_date
+        FROM export_roofing_permits
+        WHERE contractor_key IS NOT NULL
+        GROUP BY 1
+      )
+      SELECT permit_history.*,
+        bbb.rating AS bbb_rating, bbb.accredited AS bbb_accredited, bbb.accredited_since AS bbb_accredited_since,
+        bbb.out_of_business AS bbb_out_of_business, bbb.business_name AS bbb_business_name,
+        bbb.profile_url AS bbb_profile_url, bbb.snapshot_url AS bbb_snapshot_url,
+        ${snapshotDate("bbb.snapshot_at")} AS bbb_snapshot_date,
+        match.match_method AS bbb_match_method, match.match_confidence AS bbb_match_confidence
+      FROM permit_history
+      LEFT JOIN bbb_matches match USING (contractor_key)
+      LEFT JOIN bbb_profiles bbb ON bbb.profile_id = match.profile_id;
     `);
 
     await mkdir(outputDir, { recursive: true });
@@ -552,7 +631,11 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
         ...numbers(permits),
         link_status: await this.histogram("export_permits", "link_status"),
       },
-      contractors: { rows: await this.count("export_contractors") },
+      contractors: {
+        rows: await this.count("export_contractors"),
+        with_bbb_rating: await this.countWhere("export_contractors", "bbb_rating IS NOT NULL"),
+        bbb_match_method: await this.histogram("export_contractors", "bbb_match_method"),
+      },
     };
     await writeFile(join(outputDir, COVERAGE_FILE), `${JSON.stringify(coverage, null, 2)}\n`);
   }
@@ -604,7 +687,7 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       return { table, rows, added: rows, changed: 0, removed: 0 };
     }
 
-    const content = await this.contentFingerprint(output);
+    const content = await this.contentFingerprint(output, previous);
     const [delta] = await this.rows(`
       WITH current AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(output)}) t),
       previous AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(previous)}) t)
@@ -623,15 +706,25 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
     };
   }
 
-  private async contentFingerprint(parquet: string): Promise<string> {
-    const columns = (await this.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(parquet)})`))
-      .map((row) => String(row.column_name))
-      .filter((column) => !PROVENANCE_COLUMNS.includes(column));
+  private async contentFingerprint(current: string, previous: string): Promise<string> {
+    const columnsOf = async (parquet: string) =>
+      (await this.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(parquet)})`)).map((row) =>
+        String(row.column_name),
+      );
+    const previousColumns = new Set(await columnsOf(previous));
+    const columns = (await columnsOf(current)).filter(
+      (column) => previousColumns.has(column) && !PROVENANCE_COLUMNS.includes(column),
+    );
     return `md5(CAST(struct_pack(${columns.map((column) => `"${column}" := t."${column}"`).join(", ")}) AS VARCHAR))`;
   }
 
   private async rows(sql: string): Promise<Row[]> {
     return (await this.connection.runAndReadAll(sql)).getRowObjectsJson() as Row[];
+  }
+
+  private async countWhere(relation: string, condition: string): Promise<number> {
+    const [row] = await this.rows(`SELECT count(*) AS n FROM ${relation} WHERE ${condition}`);
+    return Number(row?.n ?? 0);
   }
 
   private async count(relation: string): Promise<number> {
@@ -706,4 +799,8 @@ function numbers(row: Row | undefined): Record<string, number> {
 function addressKey(number: string, prefix: string, street: string, streetType: string): string {
   const part = (column: string) => `coalesce(nullif(upper(trim(${column})), ''), '')`;
   return `concat_ws('|', ${part(number)}, ${part(prefix)}, ${part(street)}, coalesce(alias.canonical, ${part(streetType)}))`;
+}
+
+function snapshotDate(column: string): string {
+  return `CAST(left(${column}, ${ISO_DATE_LENGTH}) AS DATE)`;
 }

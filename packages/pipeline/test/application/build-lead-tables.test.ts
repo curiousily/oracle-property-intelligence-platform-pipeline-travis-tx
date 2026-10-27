@@ -13,9 +13,12 @@ import type {
   PropertyRoofEvidence,
   TableSummary,
 } from "../../src/application/lead-build-ports.js";
+import { type BbbMatch, BbbMatchMethod } from "../../src/domain/bbb-match.js";
+import { type BbbProfile, BbbRating } from "../../src/domain/bbb-profile.js";
+import { Confidence } from "../../src/domain/confidence.js";
 import { OwnerLocality } from "../../src/domain/owner-signals.js";
 import { PermitState } from "../../src/domain/permit-state.js";
-import { Confidence, RoofAnchor } from "../../src/domain/roof-age.js";
+import { RoofAnchor } from "../../src/domain/roof-age.js";
 import { RoofWork } from "../../src/domain/roof-work.js";
 
 const AS_OF = "2026-10-27";
@@ -43,6 +46,7 @@ class FakeWarehouse implements LeadWarehouse {
   loadedFrom: BuildInputs | undefined;
   classified: readonly ClassifiedPermit[] = [];
   roofAges: readonly PropertyRoofAge[] = [];
+  bbbMatches: readonly BbbMatch[] = [];
   ownerSignals: readonly OwnerSignals[] = [];
   contractorKeys: readonly ContractorKey[] = [];
   exportedTo: { outputDir: string; previousDir: string | undefined } | undefined;
@@ -106,6 +110,30 @@ class FakeWarehouse implements LeadWarehouse {
   }
   async saveContractorKeys(rows: readonly ContractorKey[]) {
     this.contractorKeys = rows;
+  }
+  async bbbProfiles(): Promise<BbbProfile[]> {
+    return [
+      {
+        profileId: "0825-1",
+        name: "Reliable Roofing, Inc.",
+        alternateNames: [],
+        phones: ["512.555.0142"],
+        city: "Austin",
+        state: "TX",
+        zip: "78704",
+        rating: BbbRating.APlus,
+        accredited: true,
+        accreditedSince: "2014-05-20",
+        outOfBusiness: false,
+        profileUrl:
+          "https://www.bbb.org/us/tx/austin/profile/roofing-contractors/reliable-roofing-0825-1",
+        snapshotUrl: "https://web.archive.org/web/20260710203309/https://www.bbb.org/x",
+        snapshotAt: "2026-07-10T20:33:09Z",
+      },
+    ];
+  }
+  async saveBbbMatches(rows: readonly BbbMatch[]) {
+    this.bbbMatches = rows;
   }
   async exportTables(outputDir: string, previousDir: string | undefined): Promise<TableSummary[]> {
     this.exportedTo = { outputDir, previousDir };
@@ -185,6 +213,19 @@ describe("buildLeadTables", () => {
     ]);
   });
 
+  it("matches contractors to archived BBB profiles by name and phone", async () => {
+    const { warehouse } = await build();
+
+    expect(warehouse.bbbMatches).toEqual([
+      {
+        contractorKey: "reliable roofing",
+        profileId: "0825-1",
+        method: BbbMatchMethod.NameAndPhone,
+        confidence: Confidence.High,
+      },
+    ]);
+  });
+
   it("exports the tables against the previous build and reports what it built", async () => {
     const { warehouse, result } = await build();
 
@@ -201,6 +242,7 @@ describe("buildLeadTables", () => {
       roofWork: { [RoofWork.Replacement]: 2, [RoofWork.Unrelated]: 1 },
       roofAgeConfidence: { [Confidence.High]: 1 },
       ownerLocality: { [OwnerLocality.OutOfState]: 1 },
+      bbbMatches: { [BbbMatchMethod.NameAndPhone]: 1 },
       tables: [{ table: "properties", rows: 2, added: 2, changed: 0, removed: 0 }],
     });
   });
