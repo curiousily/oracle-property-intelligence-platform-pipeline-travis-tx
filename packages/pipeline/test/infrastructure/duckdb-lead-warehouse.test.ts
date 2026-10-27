@@ -366,15 +366,32 @@ describe("DuckDbLeadWarehouse", () => {
     }
   });
 
+  it("does not count a re-fetch of identical permits as a change", async () => {
+    await writeGzipJson(
+      join(dataDir, "raw", "austin-permits", "20261028T000000Z", "page-00001.json.gz"),
+      LATEST_PERMITS,
+    );
+
+    const refetched = await build("build-4", "build-1");
+
+    expect(refetched.tables).toEqual(
+      expect.arrayContaining([
+        { table: "permits", rows: 6, added: 0, changed: 0, removed: 0 },
+        { table: "roofing_permits", rows: 3, added: 0, changed: 0, removed: 0 },
+      ]),
+    );
+  });
+
   it("writes byte-identical tables from the same inputs, so unchanged tables keep their CIDs", async () => {
-    await build("build-3", "build-1");
+    await build("build-5");
+    await build("build-6");
 
     for (const table of ["permits", "roofing_permits", "properties", "contractors"]) {
       const digest = async (buildId: string) =>
         createHash("sha256")
           .update(await readFile(join(dataDir, "build", buildId, `${table}.parquet`)))
           .digest("hex");
-      expect(await digest("build-3")).toBe(await digest("build-1"));
+      expect(await digest("build-6")).toBe(await digest("build-5"));
     }
   });
 });

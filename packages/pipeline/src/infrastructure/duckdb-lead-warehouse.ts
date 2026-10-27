@@ -43,6 +43,7 @@ const SAMPLES_DIR = "samples";
 const LONG_OPEN_SAMPLE_FILE = "long-open-roofing-permits.csv";
 const AGED_ROOFS_SAMPLE_FILE = "aged-roofs.csv";
 const SAMPLE_ROWS = 100;
+const PROVENANCE_COLUMNS = ["source_run_id"];
 const CONFIDENCE_ORDER = [Confidence.High, Confidence.Medium, Confidence.Low]
   .map((confidence, rank) => `WHEN '${confidence}' THEN ${rank}`)
   .join(" ");
@@ -537,9 +538,10 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       return { table, rows, added: rows, changed: 0, removed: 0 };
     }
 
+    const content = await this.contentFingerprint(output);
     const [delta] = await this.rows(`
-      WITH current AS (SELECT ${key} AS k, md5(CAST(t AS VARCHAR)) AS h FROM read_parquet(${literal(output)}) t),
-      previous AS (SELECT ${key} AS k, md5(CAST(t AS VARCHAR)) AS h FROM read_parquet(${literal(previous)}) t)
+      WITH current AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(output)}) t),
+      previous AS (SELECT ${key} AS k, ${content} AS h FROM read_parquet(${literal(previous)}) t)
       SELECT
         count(*) FILTER (WHERE previous.k IS NULL) AS added,
         count(*) FILTER (WHERE current.k IS NOT NULL AND previous.k IS NOT NULL AND current.h <> previous.h) AS changed,
@@ -553,6 +555,13 @@ export class DuckDbLeadWarehouse implements LeadWarehouse {
       changed: Number(delta?.changed ?? 0),
       removed: Number(delta?.removed ?? 0),
     };
+  }
+
+  private async contentFingerprint(parquet: string): Promise<string> {
+    const columns = (await this.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(parquet)})`))
+      .map((row) => String(row.column_name))
+      .filter((column) => !PROVENANCE_COLUMNS.includes(column));
+    return `md5(CAST(struct_pack(${columns.map((column) => `"${column}" := t."${column}"`).join(", ")}) AS VARCHAR))`;
   }
 
   private async rows(sql: string): Promise<Row[]> {
