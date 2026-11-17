@@ -78,5 +78,15 @@
       "name": "k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c",
       "resolvedCid": "bafkreiehcpbkg7yp2dobb24plu5lj2io76mtbbwuebqrhsugtd737jwdti"
     }
+  },
+  {
+    "buildId": "20261117T011042Z",
+    "publishedAt": "2026-11-17T01:13:33.079Z",
+    "manifestCid": "bafkreib33ow5qjasokrqtoy6wdt77bmdb5gj6c32mnl7zh6wxlbdxdsozm",
+    "rootCid": "bafybeidppzufocdbyrhooduz4vhn2ivhkaooq575ugiy6q36jjpkpz2xgm",
+    "ipns": {
+      "name": "k51qzi5uqu5dkkce5c4ypc8o1xsrybtdhfae3ec2f3nbhz5ht1c4msv89ftm5c",
+      "resolvedCid": "bafkreib33ow5qjasokrqtoy6wdt77bmdb5gj6c32mnl7zh6wxlbdxdsozm"
+    }
   }
 ]
